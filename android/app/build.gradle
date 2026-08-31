@@ -23,17 +23,17 @@ if (flutterVersionName == null) {
 }
 
 android {
-    namespace "com.example.site_daily_log"
-    compileSdkVersion 34
-    ndkVersion flutter.ndkVersion
+    namespace = "com.example.site_daily_log"
+    compileSdk = 35
+    ndkVersion = flutter.ndkVersion
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
     kotlinOptions {
-        jvmTarget = '1.8'
+        jvmTarget = '21'
     }
 
     sourceSets {
@@ -41,25 +41,25 @@ android {
     }
 
     defaultConfig {
-        applicationId "com.example.site_daily_log"
-        minSdkVersion 23
-        targetSdkVersion 34
-        versionCode flutterVersionCode.toInteger()
-        versionName flutterVersionName
+        applicationId = "com.example.site_daily_log"
+        minSdk = 23
+        targetSdk = 35
+        versionCode = flutterVersionCode.toInteger()
+        versionName = flutterVersionName
     }
 
     buildTypes {
         release {
-            signingConfig signingConfigs.debug
-            minifyEnabled true
-            shrinkResources true
+            signingConfig = signingConfigs.debug
+            minifyEnabled = true
+            shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 }
 
 flutter {
-    source '../..'
+    source = '../..'
 }
 
 dependencies {}
