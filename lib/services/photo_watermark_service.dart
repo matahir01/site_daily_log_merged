@@ -1,13 +1,11 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 import 'package:geolocator/geolocator.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 
 /// Stamps GPS coordinates, site name, and date/time onto a photo.
-/// Runs **after** compression. If watermarking fails for any reason,
-/// returns the original compressed file so the log is never lost.
+/// If watermarking fails for any reason, returns the original file.
 class PhotoWatermarkService {
   static Future<File> watermarkPhoto({
     required String imagePath,
@@ -24,7 +22,7 @@ class PhotoWatermarkService {
           desiredAccuracy: LocationAccuracy.best,
         );
       } catch (_) {
-        // GPS unavailable — continue without coordinates
+        // GPS unavailable
       }
 
       final now = DateTime.now();
@@ -40,13 +38,23 @@ class PhotoWatermarkService {
       final barHeight = 28 * lines.length + 16;
       final yStart = image.height - barHeight;
 
-      // Fast overlay: create a semi-transparent bar image and composite it
-      final bar = img.Image(width: image.width, height: barHeight);
-      bar.fill(img.ColorRgba8(0, 0, 0, 180));
-      img.compositeImage(image, bar, dstX: 0, dstY: yStart);
+      // Draw semi-transparent bar directly on image (bar area only — fast)
+      for (int y = yStart; y < image.height; y++) {
+        for (int x = 0; x < image.width; x++) {
+          final pixel = image.getPixel(x, y);
+          image.setPixel(
+            x, y,
+            img.ColorRgba8(
+              (pixel.r * 0.3).toInt(),
+              (pixel.g * 0.3).toInt(),
+              (pixel.b * 0.3).toInt(),
+              200,
+            ),
+          );
+        }
+      }
 
-      // Try to draw text. If fonts aren't available (image >=4.1.0),
-      // the overlay bar alone still marks the photo as official.
+      // Draw text if font is available (image >=4.1.0 may not ship fonts)
       try {
         final font = img.arial14;
         for (int i = 0; i < lines.length; i++) {
@@ -70,7 +78,6 @@ class PhotoWatermarkService {
       await file.writeAsBytes(img.encodePng(image));
       return file;
     } catch (e) {
-      // Watermarking failed — return original so the log isn't lost
       return File(imagePath);
     }
   }
