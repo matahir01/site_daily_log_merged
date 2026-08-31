@@ -205,7 +205,7 @@ class ExcelExportService {
 
     int rowIdx = 1;
     for (final cat in ExpenseCategory.values) {
-      final row = [cat.label];
+      final row = <dynamic>[cat.label];
       double catTotal = 0;
       for (final month in months) {
         double sum = 0;
@@ -281,8 +281,6 @@ class ExcelExportService {
       cell.value = TextCellValue(headers[i].toString());
       cell.cellStyle = CellStyle(
         bold: true,
-        backgroundColorHex: 'FF1A365D',
-        fontColorHex: 'FFFFFFFF',
       );
     }
   }

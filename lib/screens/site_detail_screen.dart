@@ -430,8 +430,7 @@ class _SiteDetailScreenState extends State<SiteDetailScreen> {
                     backgroundColor: Colors.blue.shade100,
                     child: Text('${log.date.day.toString().padLeft(2, '0')}'),
                   ),
-                  title: Text(log.workCompleted?.split('
-').first ?? 'No activity recorded'),
+                  title: Text(log.workCompleted?.split('\n').first ?? 'No activity recorded'),
                   subtitle: Text(DateFormat.yMMMd().format(log.date)),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => _navigate(DailyLogDetailScreen(log: log, site: widget.site)),

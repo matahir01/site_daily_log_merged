@@ -3,6 +3,8 @@ enum CashFloatStatus { ok, check }
 extension CashFloatStatusX on CashFloatStatus {
   String get dbValue => this == CashFloatStatus.ok ? 'OK' : 'CHECK';
 
+  String get label => this == CashFloatStatus.ok ? 'OK' : 'CHECK';
+
   static CashFloatStatus fromDb(String value) =>
       value == 'OK' ? CashFloatStatus.ok : CashFloatStatus.check;
 }
