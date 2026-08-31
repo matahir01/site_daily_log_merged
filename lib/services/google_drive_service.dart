@@ -16,6 +16,9 @@ class GoogleDriveService {
     final account = await _googleSignIn.signInSilently() ?? await _googleSignIn.signIn();
     if (account == null) throw Exception('Google Sign-In required');
     final auth = await account.authentication;
+    if (auth.accessToken == null) {
+      throw Exception('Google Sign-In failed: no access token');
+    }
     final client = http.Client();
     return drive.DriveApi(
       _AuthClient(client, auth.accessToken!, auth.idToken),

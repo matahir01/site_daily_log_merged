@@ -43,6 +43,7 @@ android {
     defaultConfig {
         applicationId = "com.example.site_daily_log"
         minSdk = 23
+        multiDexEnabled = true
         targetSdk = 35
         versionCode = flutterVersionCode.toInteger()
         versionName = flutterVersionName
