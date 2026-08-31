@@ -1,18 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-    <!-- Needed by geolocator for GPS photo watermarking / site location -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-
-    <!-- Needed by image_picker / photo capture -->
-    <uses-permission android:name="android.permission.CAMERA"/>
-
-    <!-- Needed by http / google_sign_in / googleapis (Drive backup) -->
-    <uses-permission android:name="android.permission.INTERNET"/>
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-
     <application
-        android:label="site_daily_log"
+        android:label="Site Daily Log"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -36,4 +24,8 @@
             android:name="flutterEmbedding"
             android:value="2" />
     </application>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.CAMERA"/>
 </manifest>
