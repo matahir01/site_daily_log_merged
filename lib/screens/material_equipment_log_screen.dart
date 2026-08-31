@@ -131,6 +131,9 @@ class _MaterialEquipmentLogScreenState
 
   Future<void> _saveMaterialLogs() async {
     if (_dailyLogId == null) return;
+    // Clear out any rows from a previous save for this daily log so
+    // re-saving doesn't accumulate duplicate rows.
+    await _db.deleteMaterialStockLogsForLog(_dailyLogId!);
     for (final item in _materialItems) {
       final name = item['name']!;
       final unit = item['unit']!;
@@ -150,6 +153,9 @@ class _MaterialEquipmentLogScreenState
 
   Future<void> _saveEquipmentLogs() async {
     if (_dailyLogId == null) return;
+    // Clear out any rows from a previous save for this daily log so
+    // re-saving doesn't accumulate duplicate rows.
+    await _db.deleteEquipmentDippingLogsForLog(_dailyLogId!);
     for (final name in _equipmentNames) {
       final log = EquipmentDippingLog(
         id: const Uuid().v4(),

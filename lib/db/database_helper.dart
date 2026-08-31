@@ -516,6 +516,11 @@ class DatabaseHelper {
     await db.delete('material_stock_logs', where: 'id = ?', whereArgs: [id]);
   }
 
+  Future<void> deleteMaterialStockLogsForLog(String dailyLogId) async {
+    final db = await database;
+    await db.delete('material_stock_logs', where: 'daily_log_id = ?', whereArgs: [dailyLogId]);
+  }
+
   // ---------- Equipment Dipping Logs ----------
   Future<void> insertEquipmentDippingLog(EquipmentDippingLog e) async {
     final db = await database;
@@ -537,6 +542,11 @@ class DatabaseHelper {
   Future<void> deleteEquipmentDippingLog(String id) async {
     final db = await database;
     await db.delete('equipment_dipping_logs', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> deleteEquipmentDippingLogsForLog(String dailyLogId) async {
+    final db = await database;
+    await db.delete('equipment_dipping_logs', where: 'daily_log_id = ?', whereArgs: [dailyLogId]);
   }
 
   // ---------- Cash Floats ----------

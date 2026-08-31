@@ -34,7 +34,11 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   }
 
   Future<void> _loadData() async {
-    final cats = await _db.getExpenseTotalsByCategory(widget.siteId);
+    final rawCats = await _db.getExpenseTotalsByCategory(widget.siteId);
+    final cats = <String, double>{
+      for (final entry in rawCats.entries)
+        ExpenseCategoryX.fromLabelOrName(entry.key).label: entry.value,
+    };
     final allExp = await _db.getExpensesForSite(widget.siteId);
     final cashFloats = await _db.getCashFloatsForSite(widget.siteId);
 

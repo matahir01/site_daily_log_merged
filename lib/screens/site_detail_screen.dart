@@ -75,7 +75,9 @@ class _SiteDetailScreenState extends State<SiteDetailScreen> {
         expenses: _expenses,
       );
       if (mounted) {
-        await Share.shareXFiles([XFile(file.path)], text: '${widget.site.name} report');
+        await SharePlus.instance.share(
+          ShareParams(files: [XFile(file.path)], text: '${widget.site.name} report'),
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -97,7 +99,9 @@ class _SiteDetailScreenState extends State<SiteDetailScreen> {
         expenses: _expenses,
       );
       if (mounted) {
-        await Share.shareXFiles([XFile(file.path)], text: '${widget.site.name} export');
+        await SharePlus.instance.share(
+          ShareParams(files: [XFile(file.path)], text: '${widget.site.name} export'),
+        );
       }
     } catch (e) {
       if (mounted) {

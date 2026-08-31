@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
@@ -76,9 +77,11 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
         expenses: _expenses,
       );
       if (mounted) {
-        await Share.shareXFiles(
-          [XFile(file.path)],
-          text: 'Site Daily Report — ${widget.site.name}',
+        await SharePlus.instance.share(
+          ShareParams(
+            files: [XFile(file.path)],
+            text: 'Site Daily Report — ${widget.site.name}',
+          ),
         );
       }
     } catch (e) {

@@ -1,8 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 import '../db/database_helper.dart';
 import '../models/project.dart';
 import '../models/site.dart';
+import '../models/daily_log.dart';
+import '../models/expense.dart';
+import '../models/material_item.dart';
+import '../services/pdf_report_service.dart';
+import '../services/excel_export_service.dart';
 import 'site_detail_screen.dart';
 
 class ProjectDashboardScreen extends StatefulWidget {
@@ -18,6 +24,8 @@ class _ProjectDashboardScreenState extends State<ProjectDashboardScreen> {
   List<Site> _sites = [];
   final _nameController = TextEditingController();
   final _addressController = TextEditingController();
+  bool _generatingPdf = false;
+  bool _generatingExcel = false;
 
   @override
   void initState() {
@@ -28,6 +36,79 @@ class _ProjectDashboardScreenState extends State<ProjectDashboardScreen> {
   Future<void> _load() async {
     final data = await _db.getSitesForProject(widget.project.id);
     setState(() => _sites = data);
+  }
+
+  Future<void> _exportProjectPdf() async {
+    if (_sites.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Add at least one site before exporting a project report')),
+      );
+      return;
+    }
+    setState(() => _generatingPdf = true);
+    try {
+      final logsBySite = <String, List<DailyLog>>{};
+      final expensesBySite = <String, List<Expense>>{};
+      for (final site in _sites) {
+        logsBySite[site.id] = await _db.getLogsForSite(site.id);
+        expensesBySite[site.id] = await _db.getExpensesForSite(site.id);
+      }
+      final file = await PdfReportService.generateProjectReport(
+        project: widget.project,
+        sites: _sites,
+        logsBySite: logsBySite,
+        expensesBySite: expensesBySite,
+      );
+      if (mounted) {
+        await SharePlus.instance.share(
+          ShareParams(files: [XFile(file.path)], text: '${widget.project.name} project report'),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to generate PDF: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _generatingPdf = false);
+    }
+  }
+
+  Future<void> _exportProjectExcel() async {
+    if (_sites.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Add at least one site before exporting a project workbook')),
+      );
+      return;
+    }
+    setState(() => _generatingExcel = true);
+    try {
+      final logsBySite = <String, List<DailyLog>>{};
+      final materialsBySite = <String, List<MaterialItem>>{};
+      final expensesBySite = <String, List<Expense>>{};
+      for (final site in _sites) {
+        logsBySite[site.id] = await _db.getLogsForSite(site.id);
+        materialsBySite[site.id] = await _db.getMaterialsForSite(site.id);
+        expensesBySite[site.id] = await _db.getExpensesForSite(site.id);
+      }
+      final file = await ExcelExportService.generateProjectWorkbook(
+        project: widget.project,
+        sites: _sites,
+        logsBySite: logsBySite,
+        materialsBySite: materialsBySite,
+        expensesBySite: expensesBySite,
+      );
+      if (mounted) {
+        await SharePlus.instance.share(
+          ShareParams(files: [XFile(file.path)], text: '${widget.project.name} project export'),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to generate Excel file: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _generatingExcel = false);
+    }
   }
 
   Future<void> _addSite() async {
@@ -107,6 +188,20 @@ class _ProjectDashboardScreenState extends State<ProjectDashboardScreen> {
       appBar: AppBar(
         title: Text(widget.project.name),
         actions: [
+          IconButton(
+            icon: _generatingPdf
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.picture_as_pdf),
+            tooltip: 'Export project report',
+            onPressed: _generatingPdf ? null : _exportProjectPdf,
+          ),
+          IconButton(
+            icon: _generatingExcel
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.table_chart),
+            tooltip: 'Export project report (.xlsx)',
+            onPressed: _generatingExcel ? null : _exportProjectExcel,
+          ),
           if (widget.project.client != null)
             Padding(
               padding: const EdgeInsets.only(right: 16),
