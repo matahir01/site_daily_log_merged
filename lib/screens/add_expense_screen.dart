@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 import '../db/database_helper.dart';
 import '../models/expense.dart';
+import '../services/google_sheets_service.dart';
 import '../utils/currency_formatter.dart';
 
 class AddExpenseScreen extends StatefulWidget {
@@ -109,6 +110,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       );
       await DatabaseHelper.instance.insertExpense(expense);
     }
+    GoogleSheetsService.autoSyncSite(widget.siteId);
 
     if (mounted) Navigator.pop(context);
   }

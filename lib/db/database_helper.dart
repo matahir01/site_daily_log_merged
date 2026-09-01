@@ -10,13 +10,14 @@ import '../models/attendance.dart';
 import '../models/material_stock_log.dart';
 import '../models/equipment_dipping_log.dart';
 import '../models/cash_float.dart';
+import '../models/diesel_activity_issuance.dart';
 
 class DatabaseHelper {
   DatabaseHelper._internal();
   static final DatabaseHelper instance = DatabaseHelper._internal();
   static Database? _db;
 
-  static const int _dbVersion = 3;
+  static const int _dbVersion = 5;
 
   Future<Database> get database async {
     if (_db != null) return _db!;
@@ -114,6 +115,34 @@ class DatabaseHelper {
       )
     ''');
     await _createV3Tables(db);
+    await _createV4Tables(db);
+    await _createV5Tables(db);
+  }
+
+  Future<void> _createV5Tables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS sheet_sync (
+        site_id TEXT PRIMARY KEY,
+        spreadsheet_id TEXT,
+        spreadsheet_url TEXT,
+        auto_sync INTEGER NOT NULL DEFAULT 0,
+        last_synced_at TEXT,
+        last_sync_error TEXT,
+        FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+      )
+    ''');
+  }
+
+  Future<void> _createV4Tables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS diesel_activity_issuance (
+        id TEXT PRIMARY KEY,
+        daily_log_id TEXT NOT NULL,
+        activity_name TEXT NOT NULL,
+        litres_issued REAL NOT NULL DEFAULT 0.0,
+        FOREIGN KEY (daily_log_id) REFERENCES daily_logs (id) ON DELETE CASCADE
+      )
+    ''');
   }
 
   Future<void> _createV3Tables(Database db) async {
@@ -219,6 +248,12 @@ class DatabaseHelper {
         WHERE total_amount IS NULL OR unit_price IS NULL OR description IS NULL OR month IS NULL
       ''');
     }
+    if (oldVersion < 4) {
+      await _createV4Tables(db);
+    }
+    if (oldVersion < 5) {
+      await _createV5Tables(db);
+    }
   }
 
   // ---------- Projects ----------
@@ -249,6 +284,12 @@ class DatabaseHelper {
     final rows = await db.query('sites',
         where: 'projectId = ?', whereArgs: [projectId], orderBy: 'createdAt DESC');
     return rows.map((r) => Site.fromMap(r)).toList();
+  }
+
+  Future<Site?> getSiteById(String id) async {
+    final db = await database;
+    final rows = await db.query('sites', where: 'id = ?', whereArgs: [id], limit: 1);
+    return rows.isNotEmpty ? Site.fromMap(rows.first) : null;
   }
 
   Future<void> deleteSite(String id) async {
@@ -547,6 +588,146 @@ class DatabaseHelper {
   Future<void> deleteEquipmentDippingLogsForLog(String dailyLogId) async {
     final db = await database;
     await db.delete('equipment_dipping_logs', where: 'daily_log_id = ?', whereArgs: [dailyLogId]);
+  }
+
+  /// Every material stock row for a site, each tagged with its log's date —
+  /// used for exports that need a per-day ledger rather than one log at a time.
+  Future<List<Map<String, dynamic>>> getMaterialStockLogsForSite(String siteId) async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT m.*, l.date AS log_date FROM material_stock_logs m
+      INNER JOIN daily_logs l ON m.daily_log_id = l.id
+      WHERE l.siteId = ?
+      ORDER BY l.date ASC, m.item_name ASC
+    ''', [siteId]);
+  }
+
+  /// Every equipment dipping row for a site, each tagged with its log's date.
+  Future<List<Map<String, dynamic>>> getEquipmentDippingLogsForSite(String siteId) async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT e.*, l.date AS log_date FROM equipment_dipping_logs e
+      INNER JOIN daily_logs l ON e.daily_log_id = l.id
+      WHERE l.siteId = ?
+      ORDER BY l.date ASC, e.equipment_name ASC
+    ''', [siteId]);
+  }
+
+  /// Every ad-hoc diesel activity issuance row for a site, tagged with date.
+  Future<List<Map<String, dynamic>>> getDieselActivityForSite(String siteId) async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT d.*, l.date AS log_date FROM diesel_activity_issuance d
+      INNER JOIN daily_logs l ON d.daily_log_id = l.id
+      WHERE l.siteId = ?
+      ORDER BY l.date ASC
+    ''', [siteId]);
+  }
+
+  // ---------- Diesel Activity Issuance (non-dipped machines/activities) ----------
+  Future<void> insertDieselActivityIssuance(DieselActivityIssuance d) async {
+    final db = await database;
+    await db.insert('diesel_activity_issuance', d.toMap());
+  }
+
+  Future<List<DieselActivityIssuance>> getDieselActivityForLog(String dailyLogId) async {
+    final db = await database;
+    final rows = await db.query('diesel_activity_issuance',
+        where: 'daily_log_id = ?', whereArgs: [dailyLogId]);
+    return rows.map((r) => DieselActivityIssuance.fromMap(r)).toList();
+  }
+
+  Future<void> deleteDieselActivityForLog(String dailyLogId) async {
+    final db = await database;
+    await db.delete('diesel_activity_issuance', where: 'daily_log_id = ?', whereArgs: [dailyLogId]);
+  }
+
+  /// Sitewide diesel totals across every daily log for a site — used by
+  /// exports (Excel/PDF) to show cumulative received/issued/balance rather
+  /// than just a single day's snapshot.
+  Future<Map<String, double>> getDieselTotalsForSite(String siteId) async {
+    final db = await database;
+    final materialRows = await db.rawQuery('''
+      SELECT SUM(m.received) AS recv FROM material_stock_logs m
+      INNER JOIN daily_logs l ON m.daily_log_id = l.id
+      WHERE l.siteId = ? AND m.item_name = 'Diesel'
+    ''', [siteId]);
+    final machineRows = await db.rawQuery('''
+      SELECT SUM(e.diesel_issued_litres) AS issued FROM equipment_dipping_logs e
+      INNER JOIN daily_logs l ON e.daily_log_id = l.id
+      WHERE l.siteId = ?
+    ''', [siteId]);
+    final activityRows = await db.rawQuery('''
+      SELECT SUM(d.litres_issued) AS issued FROM diesel_activity_issuance d
+      INNER JOIN daily_logs l ON d.daily_log_id = l.id
+      WHERE l.siteId = ?
+    ''', [siteId]);
+    final openingBal = await getLastClosingBalance(siteId, 'Diesel') ?? 0.0;
+    final received = (materialRows.first['recv'] as num?)?.toDouble() ?? 0.0;
+    final issuedMachines = (machineRows.first['issued'] as num?)?.toDouble() ?? 0.0;
+    final issuedActivities = (activityRows.first['issued'] as num?)?.toDouble() ?? 0.0;
+    return {
+      'opening': openingBal,
+      'received': received,
+      'issuedMachines': issuedMachines,
+      'issuedActivities': issuedActivities,
+      'balance': openingBal + received - issuedMachines - issuedActivities,
+    };
+  }
+
+  /// Sitewide reinforcement (rebar) totals per size across every daily log.
+  Future<Map<String, Map<String, double>>> getReinforcementTotalsForSite(String siteId) async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT m.item_name AS item, SUM(m.received) AS recv, SUM(m.issued) AS issued
+      FROM material_stock_logs m
+      INNER JOIN daily_logs l ON m.daily_log_id = l.id
+      WHERE l.siteId = ? AND m.item_name LIKE '%Rebar%'
+      GROUP BY m.item_name
+    ''', [siteId]);
+    final result = <String, Map<String, double>>{};
+    for (final r in rows) {
+      final item = r['item'] as String;
+      final closing = await getLastClosingBalance(siteId, item) ?? 0.0;
+      result[item] = {
+        'received': (r['recv'] as num?)?.toDouble() ?? 0.0,
+        'issued': (r['issued'] as num?)?.toDouble() ?? 0.0,
+        'closing': closing,
+      };
+    }
+    return result;
+  }
+
+  // ---------- Google Sheets Sync Link ----------
+  Future<Map<String, dynamic>?> getSheetSync(String siteId) async {
+    final db = await database;
+    final rows = await db.query('sheet_sync', where: 'site_id = ?', whereArgs: [siteId]);
+    return rows.isNotEmpty ? rows.first : null;
+  }
+
+  Future<void> upsertSheetSync({
+    required String siteId,
+    String? spreadsheetId,
+    String? spreadsheetUrl,
+    bool? autoSync,
+    String? lastSyncedAt,
+    String? lastSyncError,
+  }) async {
+    final db = await database;
+    final existing = await getSheetSync(siteId);
+    final row = {
+      'site_id': siteId,
+      'spreadsheet_id': spreadsheetId ?? existing?['spreadsheet_id'],
+      'spreadsheet_url': spreadsheetUrl ?? existing?['spreadsheet_url'],
+      'auto_sync': (autoSync ?? ((existing?['auto_sync'] as int?) == 1)) ? 1 : 0,
+      'last_synced_at': lastSyncedAt ?? existing?['last_synced_at'],
+      'last_sync_error': lastSyncError,
+    };
+    if (existing != null) {
+      await db.update('sheet_sync', row, where: 'site_id = ?', whereArgs: [siteId]);
+    } else {
+      await db.insert('sheet_sync', row);
+    }
   }
 
   // ---------- Cash Floats ----------

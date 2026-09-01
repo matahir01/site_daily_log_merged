@@ -4,6 +4,7 @@ import '../db/database_helper.dart';
 import '../models/worker.dart';
 import '../models/attendance.dart';
 import '../models/daily_log.dart';
+import '../services/google_sheets_service.dart';
 
 /// Daily crew attendance for a site. Auto-creates a [DailyLog] for today
 /// if one does not yet exist so attendance always has a log to attach to.
@@ -89,6 +90,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     }
 
     await _db.bulkUpsertAttendance(records);
+    GoogleSheetsService.autoSyncSite(widget.siteId);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Attendance saved successfully')),

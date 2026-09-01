@@ -30,6 +30,7 @@ class ExcelExportService {
     await _buildMonthlySummarySheet(excel, sites, expensesBySite, siteNameById);
     await _buildOverallSummarySheet(excel, sites, expensesBySite, siteNameById);
     await _buildCashFlowSheet(excel, sites);
+    await _buildReinforcementDieselSheet(excel, sites, siteNameById, includeSiteColumn: true);
 
     if (excel.sheets.containsKey('Sheet1') && excel.sheets.length > 1) {
       excel.delete('Sheet1');
@@ -54,6 +55,7 @@ class ExcelExportService {
     await _buildMonthlySummarySheet(excel, [site], {site.id: expenses}, siteNameById);
     await _buildOverallSummarySheet(excel, [site], {site.id: expenses}, siteNameById);
     await _buildCashFlowSheet(excel, [site]);
+    await _buildReinforcementDieselSheet(excel, [site], siteNameById, includeSiteColumn: false);
 
     if (excel.sheets.containsKey('Sheet1') && excel.sheets.length > 1) {
       excel.delete('Sheet1');
@@ -273,6 +275,65 @@ class ExcelExportService {
       }
     }
     _autoWidth(sheet, 8);
+  }
+
+  /// Sitewide, cumulative-to-date reinforcement (rebar) and diesel
+  /// reconciliation — rolled up across every daily log for each site, not
+  /// just a single day's snapshot.
+  static Future<void> _buildReinforcementDieselSheet(
+    Excel excel,
+    List<Site> sites,
+    Map<String, String> siteNameById, {
+    required bool includeSiteColumn,
+  }) async {
+    final sheet = excel['Reinforcement & Diesel'];
+    final db = DatabaseHelper.instance;
+
+    sheet.appendRow(['REINFORCEMENT SUMMARY (cumulative to date)'].map((h) => TextCellValue(h)).toList());
+    final rebarHeaders = [
+      if (includeSiteColumn) 'Site',
+      'Rebar Size',
+      'Total Received',
+      'Total Issued',
+      'Closing Balance',
+    ];
+    sheet.appendRow(rebarHeaders.map((h) => TextCellValue(h)).toList());
+    for (final site in sites) {
+      final totals = await db.getReinforcementTotalsForSite(site.id);
+      for (final entry in totals.entries) {
+        sheet.appendRow([
+          if (includeSiteColumn) TextCellValue(siteNameById[site.id] ?? site.id),
+          TextCellValue(entry.key),
+          DoubleCellValue(entry.value['received'] ?? 0.0),
+          DoubleCellValue(entry.value['issued'] ?? 0.0),
+          DoubleCellValue(entry.value['closing'] ?? 0.0),
+        ]);
+      }
+    }
+
+    sheet.appendRow([]);
+    sheet.appendRow(['DIESEL GENERAL SUMMARY (cumulative to date)'].map((h) => TextCellValue(h)).toList());
+    final dieselHeaders = [
+      if (includeSiteColumn) 'Site',
+      'Opening',
+      'Received',
+      'Issued to Machines',
+      'Issued to Activities',
+      'Balance',
+    ];
+    sheet.appendRow(dieselHeaders.map((h) => TextCellValue(h)).toList());
+    for (final site in sites) {
+      final d = await db.getDieselTotalsForSite(site.id);
+      sheet.appendRow([
+        if (includeSiteColumn) TextCellValue(siteNameById[site.id] ?? site.id),
+        DoubleCellValue(d['opening'] ?? 0.0),
+        DoubleCellValue(d['received'] ?? 0.0),
+        DoubleCellValue(d['issuedMachines'] ?? 0.0),
+        DoubleCellValue(d['issuedActivities'] ?? 0.0),
+        DoubleCellValue(d['balance'] ?? 0.0),
+      ]);
+    }
+    _autoWidth(sheet, rebarHeaders.length);
   }
 
   static void _writeHeader(Sheet sheet, List<dynamic> headers) {

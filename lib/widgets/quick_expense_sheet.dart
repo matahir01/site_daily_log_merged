@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 import '../db/database_helper.dart';
 import '../models/expense.dart';
+import '../services/google_sheets_service.dart';
 
 class QuickExpenseSheet extends StatefulWidget {
   final String siteId;
@@ -20,7 +21,9 @@ class QuickExpenseSheet extends StatefulWidget {
 
 class _QuickExpenseSheetState extends State<QuickExpenseSheet> {
   final _amountController = TextEditingController();
+  final _descriptionController = TextEditingController();
   final _amountFocus = FocusNode();
+  final _descriptionFocus = FocusNode();
   late ExpenseCategory _category = QuickExpenseSheet._lastCategory;
   String? _receiptPath;
   bool _saving = false;
@@ -29,8 +32,17 @@ class _QuickExpenseSheetState extends State<QuickExpenseSheet> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      FocusScope.of(context).requestFocus(_amountFocus);
+      FocusScope.of(context).requestFocus(_descriptionFocus);
     });
+  }
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    _descriptionController.dispose();
+    _amountFocus.dispose();
+    _descriptionFocus.dispose();
+    super.dispose();
   }
 
   Future<void> _snapReceipt() async {
@@ -55,6 +67,14 @@ class _QuickExpenseSheetState extends State<QuickExpenseSheet> {
       );
       return;
     }
+    final description = _descriptionController.text.trim();
+    if (description.isEmpty) {
+      HapticFeedback.heavyImpact();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a description first')),
+      );
+      return;
+    }
 
     setState(() => _saving = true);
     QuickExpenseSheet._lastCategory = _category;
@@ -72,11 +92,12 @@ class _QuickExpenseSheetState extends State<QuickExpenseSheet> {
       note: null,
       receiptPhotoPath: _receiptPath,
       serialNo: serialNo,
-      description: 'Quick expense',
+      description: description,
       unitPrice: amount,
       month: monthKey,
     );
     await DatabaseHelper.instance.insertExpense(expense);
+    GoogleSheetsService.autoSyncSite(widget.siteId);
 
     HapticFeedback.lightImpact();
     if (mounted) Navigator.pop(context, true);
@@ -111,6 +132,19 @@ class _QuickExpenseSheetState extends State<QuickExpenseSheet> {
                 .map((c) => DropdownMenuItem(value: c, child: Text(c.label)))
                 .toList(),
             onChanged: (v) => setState(() => _category = v!),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _descriptionController,
+            focusNode: _descriptionFocus,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(
+              labelText: 'Description',
+              hintText: 'What was this expense for?',
+              border: OutlineInputBorder(),
+            ),
+            textInputAction: TextInputAction.next,
+            onSubmitted: (_) => FocusScope.of(context).requestFocus(_amountFocus),
           ),
           const SizedBox(height: 12),
           TextField(

@@ -9,6 +9,8 @@ import '../models/site.dart';
 import '../models/attendance.dart';
 import '../models/material_stock_log.dart';
 import '../models/equipment_dipping_log.dart';
+import '../models/diesel_activity_issuance.dart';
+import '../models/cash_float.dart';
 import '../models/expense.dart';
 import '../models/worker.dart';
 import '../utils/currency_formatter.dart';
@@ -36,7 +38,10 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
   List<Worker> _workers = [];
   List<MaterialStockLog> _materials = [];
   List<EquipmentDippingLog> _equipment = [];
+  List<DieselActivityIssuance> _dieselActivity = [];
   List<Expense> _expenses = [];
+  List<Expense> _monthlyExpenses = [];
+  CashFloat? _cashFloat;
   bool _isLoading = true;
   bool _generatingPdf = false;
 
@@ -50,16 +55,23 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
     final attData = await _db.getAttendanceForLog(widget.log.id);
     final matData = await _db.getMaterialStockLogsForLog(widget.log.id);
     final eqData = await _db.getEquipmentDippingLogsForLog(widget.log.id);
+    final dieselActivityData = await _db.getDieselActivityForLog(widget.log.id);
     final workerData = await _db.getWorkersForSite(widget.site.id, activeOnly: false);
     final dateIso = widget.log.date.toIso8601String().split('T').first;
     final expData = await _db.getExpensesForSiteAndDate(widget.site.id, dateIso);
+    final monthKey = dateIso.substring(0, 7);
+    final monthlyExpData = await _db.getExpensesByMonth(widget.site.id, monthKey);
+    final cashFloatData = await _db.getCashFloatBySiteAndDate(widget.site.id, dateIso);
 
     setState(() {
       _attendance = attData;
       _materials = matData;
       _equipment = eqData;
+      _dieselActivity = dieselActivityData;
       _workers = workerData;
       _expenses = expData;
+      _monthlyExpenses = monthlyExpData;
+      _cashFloat = cashFloatData;
       _isLoading = false;
     });
   }
@@ -75,6 +87,9 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
         materials: _materials,
         equipment: _equipment,
         expenses: _expenses,
+        dieselActivity: _dieselActivity,
+        monthlyExpenses: _monthlyExpenses,
+        cashFloat: _cashFloat,
       );
       if (mounted) {
         await SharePlus.instance.share(
@@ -261,6 +276,16 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
                         e.engineOilIssuedLitres.toStringAsFixed(1),
                       ]).toList(),
                     ),
+                  if (_dieselActivity.isNotEmpty) ...[
+                    const SizedBox(height: 24),
+                    _SectionHeader('Diesel Issued to Activities'),
+                    _buildDataTable(
+                      columns: ['Activity / Machine', 'Litres'],
+                      rows: _dieselActivity
+                          .map((a) => [a.activityName, a.litresIssued.toStringAsFixed(1)])
+                          .toList(),
+                    ),
+                  ],
                   const SizedBox(height: 24),
                   _SectionHeader('Itemized Expenses'),
                   if (_expenses.isEmpty)

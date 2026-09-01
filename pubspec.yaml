@@ -41,6 +41,9 @@ dependencies:
   # --- Added: GPS photo watermarking ---
   image: ^4.1.3
 
+  # --- Added: open linked Google Sheet in browser ---
+  url_launcher: ^6.3.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

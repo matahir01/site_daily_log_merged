@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../db/database_helper.dart';
 import '../models/cash_float.dart';
+import '../services/google_sheets_service.dart';
 import '../utils/currency_formatter.dart';
 
 /// Daily cash-float reconciliation: opening balance, float received,
@@ -91,6 +92,7 @@ class _CashFloatScreenState extends State<CashFloatScreen> {
     } else {
       await _db.insertCashFloat(cashFloat);
     }
+    GoogleSheetsService.autoSyncSite(widget.siteId);
 
     setState(() => _existingFloat = cashFloat);
 

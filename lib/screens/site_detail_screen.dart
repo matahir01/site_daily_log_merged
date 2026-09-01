@@ -14,6 +14,7 @@ import 'add_daily_log_screen.dart';
 import 'add_expense_screen.dart';
 import 'attendance_screen.dart';
 import 'cash_float_screen.dart';
+import 'google_sheets_sync_screen.dart';
 import 'material_equipment_log_screen.dart';
 import 'analytics_screen.dart';
 import 'daily_log_detail_screen.dart';
@@ -38,6 +39,8 @@ class _SiteDetailScreenState extends State<SiteDetailScreen> {
   double _totalSpend = 0.0;
   double _totalFloat = 0.0;
   double _currentBalance = 0.0;
+  double _todayExpenses = 0.0;
+  bool _hasTodayFloat = false;
   bool _generatingPdf = false;
   bool _generatingExcel = false;
 
@@ -53,7 +56,20 @@ class _SiteDetailScreenState extends State<SiteDetailScreen> {
     final materials = await _db.getMaterialsForSite(widget.site.id);
     final spend = expenses.fold<double>(0.0, (s, e) => s + e.amount);
     final float = await _db.getTotalFloatReceived(widget.site.id);
-    final latestCash = await _db.getLatestCashFloat(widget.site.id);
+
+    // Live reconciliation: always reconcile TODAY's opening + float
+    // against TODAY's *current* expense total, not the frozen snapshot
+    // saved the last time the Cash Float screen was opened — so adding a
+    // Quick Expense immediately moves this balance, without needing to
+    // revisit and re-save Cash Float.
+    final today = DateTime.now();
+    final todayIso = today.toIso8601String().split('T').first;
+    final todayFloat = await _db.getCashFloatBySiteAndDate(widget.site.id, todayIso);
+    final todayExpenses = await _db.getTotalExpensesForSiteAndDate(widget.site.id, todayIso);
+    final lastFloat = await _db.getLatestCashFloat(widget.site.id);
+
+    final opening = todayFloat?.openingBalance ?? lastFloat?.expectedClosingBalance ?? 0.0;
+    final floatReceivedToday = todayFloat?.floatReceived ?? 0.0;
 
     setState(() {
       _logs = logs;
@@ -61,7 +77,9 @@ class _SiteDetailScreenState extends State<SiteDetailScreen> {
       _materials = materials;
       _totalSpend = spend;
       _totalFloat = float;
-      _currentBalance = latestCash?.expectedClosingBalance ?? 0.0;
+      _todayExpenses = todayExpenses;
+      _hasTodayFloat = todayFloat != null;
+      _currentBalance = opening + floatReceivedToday - todayExpenses;
     });
   }
 
@@ -341,7 +359,9 @@ class _SiteDetailScreenState extends State<SiteDetailScreen> {
           children: [
             Expanded(
               child: _SummaryCard(
-                title: 'Cash Balance',
+                title: _hasTodayFloat
+                    ? 'Cash Balance (Today)'
+                    : 'Cash Balance (no float logged today)',
                 value: CurrencyFormatter.formatCompact(_currentBalance),
                 color: _currentBalance < 0 ? Colors.orange.shade50 : Colors.blue.shade50,
                 icon: _currentBalance < 0 ? Icons.warning : Icons.savings,
@@ -401,6 +421,12 @@ class _SiteDetailScreenState extends State<SiteDetailScreen> {
               icon: Icons.analytics,
               color: Colors.deepPurple,
               onTap: () => _navigate(AnalyticsScreen(siteId: widget.site.id, siteName: widget.site.name)),
+            ),
+            _ActionButton(
+              label: 'Sheets Sync',
+              icon: Icons.table_chart,
+              color: Colors.green.shade700,
+              onTap: () => _navigate(GoogleSheetsSyncScreen(site: widget.site)),
             ),
           ],
         ),

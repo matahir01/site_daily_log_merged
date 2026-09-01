@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:intl/intl.dart';
@@ -11,6 +12,8 @@ import '../models/expense.dart';
 import '../models/attendance.dart';
 import '../models/material_stock_log.dart';
 import '../models/equipment_dipping_log.dart';
+import '../models/diesel_activity_issuance.dart';
+import '../models/cash_float.dart';
 import '../models/worker.dart';
 import '../utils/currency_formatter.dart';
 
@@ -149,6 +152,9 @@ class PdfReportService {
     required List<MaterialStockLog> materials,
     required List<EquipmentDippingLog> equipment,
     required List<Expense> expenses,
+    List<DieselActivityIssuance> dieselActivity = const [],
+    List<Expense> monthlyExpenses = const [],
+    CashFloat? cashFloat,
   }) async {
     final pdf = pw.Document();
     final navy = PdfColor.fromHex('#1A365D');
@@ -157,10 +163,52 @@ class PdfReportService {
     final slateBorder = PdfColors.blueGrey200;
     final emerald = PdfColor.fromHex('#059669');
     final crimson = PdfColor.fromHex('#DC2626');
+    final chartPalette = [
+      steelBlue,
+      PdfColor.fromHex('#38B2AC'),
+      PdfColor.fromHex('#ED8936'),
+      PdfColor.fromHex('#9F7AEA'),
+      PdfColor.fromHex('#48BB78'),
+      PdfColor.fromHex('#F56565'),
+      PdfColor.fromHex('#ECC94B'),
+    ];
 
     final totalExpenses = expenses.fold<double>(0.0, (s, e) => s + e.amount);
     final dateStr = DateFormat.yMMMd().format(log.date);
     final workText = log.workCompleted ?? '';
+
+    // ---- Reinforcement (rebar) roll-up across all rebar sizes ----
+    final rebarRows = materials.where((m) => m.itemName.contains('Rebar')).toList();
+    final rebarOpen = rebarRows.fold<double>(0.0, (s, m) => s + m.openingBalance);
+    final rebarRecv = rebarRows.fold<double>(0.0, (s, m) => s + m.received);
+    final rebarIssue = rebarRows.fold<double>(0.0, (s, m) => s + m.issued);
+    final rebarClose = rebarRows.fold<double>(0.0, (s, m) => s + m.closingBalance);
+
+    // ---- Diesel general summary: bulk tank + per-machine + activities ----
+    final dieselRow = materials.where((m) => m.itemName == 'Diesel').toList();
+    final dieselOpen = dieselRow.isNotEmpty ? dieselRow.first.openingBalance : 0.0;
+    final dieselRecv = dieselRow.isNotEmpty ? dieselRow.first.received : 0.0;
+    final dieselToMachines = equipment.fold<double>(0.0, (s, e) => s + e.dieselIssuedLitres);
+    final dieselToActivities = dieselActivity.fold<double>(0.0, (s, a) => s + a.litresIssued);
+    final dieselBalance = dieselOpen + dieselRecv - dieselToMachines - dieselToActivities;
+
+    // ---- Chart data ----
+    final categoryTotals = <String, double>{};
+    for (final e in expenses) {
+      categoryTotals[e.category.label] = (categoryTotals[e.category.label] ?? 0) + e.amount;
+    }
+    final burnSource = monthlyExpenses.isNotEmpty ? monthlyExpenses : expenses;
+    final dailyTotals = <DateTime, double>{};
+    for (final e in burnSource) {
+      final d = DateTime(e.date.year, e.date.month, e.date.day);
+      dailyTotals[d] = (dailyTotals[d] ?? 0) + e.amount;
+    }
+    final sortedDays = dailyTotals.keys.toList()..sort();
+    double cumulative = 0;
+    final burnPoints = sortedDays.map((d) {
+      cumulative += dailyTotals[d]!;
+      return MapEntry(d, cumulative);
+    }).toList();
 
     pdf.addPage(
       pw.MultiPage(
@@ -227,6 +275,21 @@ class PdfReportService {
               iceBlue: iceBlue,
               slateBorder: slateBorder,
             ),
+          if (rebarRows.isNotEmpty) ...[
+            pw.SizedBox(height: 10),
+            _reconciliationStrip(
+              title: 'Reinforcement Summary (All Rebar Sizes)',
+              color: steelBlue,
+              iceBlue: iceBlue,
+              slateBorder: slateBorder,
+              stats: {
+                'Opening': rebarOpen,
+                'Received': rebarRecv,
+                'Issued': rebarIssue,
+                'Closing': rebarClose,
+              },
+            ),
+          ],
           pw.SizedBox(height: 20),
           _sectionTitle('3. EQUIPMENT DIPPING & FUEL LOG', steelBlue),
           pw.SizedBox(height: 8),
@@ -252,8 +315,71 @@ class PdfReportService {
               iceBlue: iceBlue,
               slateBorder: slateBorder,
             ),
+          if (dieselRow.isNotEmpty || equipment.isNotEmpty || dieselActivity.isNotEmpty) ...[
+            pw.SizedBox(height: 10),
+            _reconciliationStrip(
+              title: 'Diesel General Summary',
+              color: steelBlue,
+              iceBlue: iceBlue,
+              slateBorder: slateBorder,
+              stats: {
+                'Opening': dieselOpen,
+                'Received': dieselRecv,
+                'To Machines': dieselToMachines,
+                'To Activities': dieselToActivities,
+                'Balance': dieselBalance,
+              },
+              unitSuffix: 'L',
+            ),
+          ],
+          if (dieselActivity.isNotEmpty) ...[
+            pw.SizedBox(height: 10),
+            pw.Text(
+              'Diesel Issued to Non-Dipped Activities',
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11),
+            ),
+            pw.SizedBox(height: 4),
+            _buildTable(
+              headers: ['Activity / Machine', 'Litres Issued'],
+              rows: dieselActivity
+                  .map((a) => [a.activityName, a.litresIssued.toStringAsFixed(1)])
+                  .toList(),
+              navy: navy,
+              iceBlue: iceBlue,
+              slateBorder: slateBorder,
+            ),
+          ],
           pw.SizedBox(height: 20),
-          _sectionTitle('4. DAILY ITEMIZED EXPENSES LEDGER', steelBlue),
+          _sectionTitle('4. VISUAL ANALYTICS & CHARTS', steelBlue),
+          pw.SizedBox(height: 8),
+          if (categoryTotals.isEmpty)
+            _emptyCard('No expense data to chart for this date')
+          else ...[
+            pw.Text(
+              'Expenditure by Category',
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11),
+            ),
+            pw.SizedBox(height: 6),
+            _barChart(categoryTotals, steelBlue),
+            pw.SizedBox(height: 16),
+            pw.Text(
+              'Budget Share by Category',
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11),
+            ),
+            pw.SizedBox(height: 6),
+            _pieChart(categoryTotals, chartPalette),
+          ],
+          if (burnPoints.length > 1) ...[
+            pw.SizedBox(height: 16),
+            pw.Text(
+              'Daily Cumulative Burn Rate',
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11),
+            ),
+            pw.SizedBox(height: 6),
+            _lineChart(burnPoints, steelBlue),
+          ],
+          pw.SizedBox(height: 20),
+          _sectionTitle('5. DAILY ITEMIZED EXPENSES LEDGER', steelBlue),
           pw.SizedBox(height: 8),
           if (expenses.isEmpty)
             _emptyCard('No expenses recorded')
@@ -312,7 +438,7 @@ class PdfReportService {
               ],
             ),
           pw.SizedBox(height: 20),
-          _sectionTitle('5. CASH FLOW & FLOAT SUMMARY', steelBlue),
+          _sectionTitle('6. CASH FLOW RECONCILIATION', steelBlue),
           pw.SizedBox(height: 8),
           pw.Container(
             padding: const pw.EdgeInsets.all(16),
@@ -321,20 +447,61 @@ class PdfReportService {
               border: pw.Border.all(color: slateBorder),
               borderRadius: pw.BorderRadius.circular(4),
             ),
-            child: pw.Column(
-              children: [
-                _summaryRow(
-                  'Total Daily Expenses:',
-                  CurrencyFormatter.format(totalExpenses),
-                ),
-                pw.Divider(color: slateBorder),
-                _summaryRow(
-                  'Net Cash Position:',
-                  CurrencyFormatter.format(-totalExpenses),
-                  valueColor: totalExpenses > 0 ? crimson : emerald,
-                ),
-              ],
-            ),
+            child: cashFloat != null
+                ? pw.Column(
+                    children: [
+                      _summaryRow('Opening Balance:', CurrencyFormatter.format(cashFloat.openingBalance)),
+                      pw.Divider(color: slateBorder),
+                      _summaryRow('Float Received:', CurrencyFormatter.format(cashFloat.floatReceived)),
+                      pw.Divider(color: slateBorder),
+                      _summaryRow('Total Daily Expenses:', CurrencyFormatter.format(cashFloat.totalExpenses)),
+                      pw.Divider(color: slateBorder),
+                      _summaryRow(
+                        'Expected Closing Balance:',
+                        CurrencyFormatter.format(cashFloat.expectedClosingBalance),
+                      ),
+                      pw.Divider(color: slateBorder),
+                      _summaryRow(
+                        'Reported Closing Balance:',
+                        CurrencyFormatter.format(cashFloat.reportedClosingBalance),
+                      ),
+                      pw.Divider(color: slateBorder),
+                      _summaryRow(
+                        'Variance:',
+                        CurrencyFormatter.format(cashFloat.variance),
+                        valueColor: cashFloat.variance.abs() < 0.005 ? emerald : crimson,
+                      ),
+                      pw.Divider(color: slateBorder),
+                      _summaryRow(
+                        'Status:',
+                        cashFloat.status.label,
+                        valueColor: cashFloat.status == CashFloatStatus.ok ? emerald : crimson,
+                      ),
+                      if (cashFloat.isOutOfPocketDeficit) ...[
+                        pw.Divider(color: slateBorder),
+                        _summaryRow('Alert:', 'OUT-OF-POCKET DEFICIT', valueColor: crimson),
+                      ],
+                    ],
+                  )
+                : pw.Column(
+                    children: [
+                      _summaryRow(
+                        'Total Daily Expenses:',
+                        CurrencyFormatter.format(totalExpenses),
+                      ),
+                      pw.Divider(color: slateBorder),
+                      _summaryRow(
+                        'Net Cash Position:',
+                        CurrencyFormatter.format(-totalExpenses),
+                        valueColor: totalExpenses > 0 ? crimson : emerald,
+                      ),
+                      pw.SizedBox(height: 4),
+                      pw.Text(
+                        'No cash-float reconciliation was recorded for this date.',
+                        style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600),
+                      ),
+                    ],
+                  ),
           ),
           pw.SizedBox(height: 30),
           pw.Row(
@@ -551,6 +718,235 @@ class PdfReportService {
       ],
     );
   }
+
+  /// A horizontal strip of key/value reconciliation stats — used for the
+  /// Reinforcement Summary and Diesel General Summary call-out blocks.
+  static pw.Widget _reconciliationStrip({
+    required String title,
+    required PdfColor color,
+    required PdfColor iceBlue,
+    required PdfColor slateBorder,
+    required Map<String, double> stats,
+    String unitSuffix = '',
+  }) {
+    final entries = stats.entries.toList();
+    return pw.Container(
+      width: double.infinity,
+      padding: const pw.EdgeInsets.all(10),
+      decoration: pw.BoxDecoration(
+        color: iceBlue,
+        border: pw.Border.all(color: slateBorder),
+        borderRadius: pw.BorderRadius.circular(4),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            title,
+            style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10, color: color),
+          ),
+          pw.SizedBox(height: 6),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: entries.map((e) {
+              final isLast = e.key == entries.last.key;
+              return pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(e.key, style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700)),
+                  pw.Text(
+                    '${e.value.toStringAsFixed(1)}$unitSuffix',
+                    style: pw.TextStyle(
+                      fontWeight: pw.FontWeight.bold,
+                      fontSize: isLast ? 12 : 10,
+                      color: isLast ? color : PdfColors.black,
+                    ),
+                  ),
+                ],
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Simple horizontal bar chart — one proportional-width bar per category,
+  /// no canvas needed, so it renders identically across pdf-package versions.
+  static pw.Widget _barChart(Map<String, double> data, PdfColor color) {
+    final maxVal = data.values.fold<double>(0, (m, v) => v > m ? v : m);
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: data.entries.map((e) {
+        final frac = maxVal > 0 ? (e.value / maxVal) : 0.0;
+        return pw.Padding(
+          padding: const pw.EdgeInsets.only(bottom: 6),
+          child: pw.Row(
+            children: [
+              pw.SizedBox(
+                width: 90,
+                child: pw.Text(e.key, style: const pw.TextStyle(fontSize: 8)),
+              ),
+              pw.Expanded(
+                child: pw.Stack(
+                  children: [
+                    pw.Container(width: double.infinity, height: 12, color: PdfColors.grey200),
+                    pw.FractionallySizedBox(
+                      widthFactor: frac.clamp(0.02, 1.0),
+                      child: pw.Container(height: 12, color: color),
+                    ),
+                  ],
+                ),
+              ),
+              pw.SizedBox(width: 6),
+              pw.SizedBox(
+                width: 50,
+                child: pw.Text(
+                  CurrencyFormatter.format(e.value),
+                  style: const pw.TextStyle(fontSize: 8),
+                ),
+              ),
+            ],
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  /// Pie chart drawn on a canvas (slices approximated with short line
+  /// segments) plus a text legend with percentage share per category.
+  static pw.Widget _pieChart(Map<String, double> data, List<PdfColor> palette) {
+    final total = data.values.fold<double>(0, (s, v) => s + v);
+    final entries = data.entries.toList();
+    return pw.Row(
+      crossAxisAlignment: pw.CrossAxisAlignment.center,
+      children: [
+        pw.SizedBox(
+          width: 110,
+          height: 110,
+          child: pw.CustomPaint(
+            size: const PdfPoint(110, 110),
+            painter: (canvas, size) {
+              if (total <= 0) return;
+              final cx = size.x / 2;
+              final cy = size.y / 2;
+              final r = size.x / 2 - 4;
+              double startAngle = -3.14159265 / 2;
+              for (var i = 0; i < entries.length; i++) {
+                final value = entries[i].value;
+                final sweep = (value / total) * 2 * 3.14159265;
+                final color = palette[i % palette.length];
+                canvas
+                  ..setColor(color)
+                  ..moveTo(cx, cy);
+                const steps = 24;
+                for (var s = 0; s <= steps; s++) {
+                  final a = startAngle + sweep * (s / steps);
+                  canvas.lineTo(cx + r * _cos(a), cy + r * _sin(a));
+                }
+                canvas
+                  ..closePath()
+                  ..fillPath();
+                startAngle += sweep;
+              }
+            },
+          ),
+        ),
+        pw.SizedBox(width: 16),
+        pw.Expanded(
+          child: pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: entries.asMap().entries.map((entry) {
+              final i = entry.key;
+              final e = entry.value;
+              final pct = total > 0 ? (e.value / total * 100) : 0.0;
+              return pw.Padding(
+                padding: const pw.EdgeInsets.only(bottom: 4),
+                child: pw.Row(
+                  children: [
+                    pw.Container(width: 8, height: 8, color: palette[i % palette.length]),
+                    pw.SizedBox(width: 6),
+                    pw.Expanded(
+                      child: pw.Text(
+                        '${e.key} — ${pct.toStringAsFixed(1)}%',
+                        style: const pw.TextStyle(fontSize: 8),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Cumulative daily-spend burn-rate line chart, drawn on a canvas with a
+  /// simple baseline axis and connected point markers.
+  static pw.Widget _lineChart(List<MapEntry<DateTime, double>> points, PdfColor color) {
+    final maxVal = points.fold<double>(0, (m, e) => e.value > m ? e.value : m);
+    final dateFmt = DateFormat.Md();
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.SizedBox(
+          width: double.infinity,
+          height: 100,
+          child: pw.CustomPaint(
+            size: const PdfPoint(480, 100),
+            painter: (canvas, size) {
+              const padding = 8.0;
+              final plotW = size.x - padding * 2;
+              final plotH = size.y - padding * 2;
+              // Baseline axis
+              canvas
+                ..setColor(PdfColors.grey400)
+                ..setLineWidth(0.5)
+                ..moveTo(padding, size.y - padding)
+                ..lineTo(size.x - padding, size.y - padding)
+                ..strokePath();
+              if (points.isEmpty || maxVal <= 0) return;
+              final stepX = points.length > 1 ? plotW / (points.length - 1) : 0.0;
+              canvas
+                ..setColor(color)
+                ..setLineWidth(1.2);
+              for (var i = 0; i < points.length; i++) {
+                final x = padding + stepX * i;
+                final y = size.y - padding - (points[i].value / maxVal) * plotH;
+                if (i == 0) {
+                  canvas.moveTo(x, y);
+                } else {
+                  canvas.lineTo(x, y);
+                }
+              }
+              canvas.strokePath();
+              for (var i = 0; i < points.length; i++) {
+                final x = padding + stepX * i;
+                final y = size.y - padding - (points[i].value / maxVal) * plotH;
+                canvas
+                  ..setColor(color)
+                  ..drawEllipse(x, y, 1.6, 1.6)
+                  ..fillPath();
+              }
+            },
+          ),
+        ),
+        pw.SizedBox(height: 4),
+        pw.Row(
+          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+          children: [
+            pw.Text(dateFmt.format(points.first.key), style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
+            pw.Text('Cumulative spend', style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
+            pw.Text(dateFmt.format(points.last.key), style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
+          ],
+        ),
+      ],
+    );
+  }
+
+  static double _cos(double radians) => math.cos(radians);
+  static double _sin(double radians) => math.sin(radians);
 
   static pw.Widget _summaryRow(String label, String value, {PdfColor? valueColor}) {
     return pw.Row(

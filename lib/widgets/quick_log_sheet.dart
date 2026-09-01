@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 import 'package:geolocator/geolocator.dart';
 import '../db/database_helper.dart';
 import '../models/daily_log.dart';
+import '../services/google_sheets_service.dart';
 import '../services/image_compression_service.dart';
 import '../services/photo_watermark_service.dart';
 
@@ -90,6 +91,7 @@ class _QuickLogSheetState extends State<QuickLogSheet> {
       lng: position?.longitude,
     );
     await DatabaseHelper.instance.insertDailyLog(log);
+    GoogleSheetsService.autoSyncSite(widget.siteId);
 
     HapticFeedback.lightImpact();
     if (mounted) Navigator.pop(context, true);
