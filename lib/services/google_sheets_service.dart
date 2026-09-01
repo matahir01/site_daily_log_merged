@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import '../db/database_helper.dart';
 import '../models/site.dart';
 import '../models/expense.dart';
+import '../models/cash_float.dart';
 import 'google_auth.dart';
 
 /// Current sync state for a site's linked Google Sheet, read from the

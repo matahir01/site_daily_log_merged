@@ -788,14 +788,23 @@ class PdfReportService {
                 child: pw.Text(e.key, style: const pw.TextStyle(fontSize: 8)),
               ),
               pw.Expanded(
-                child: pw.Stack(
-                  children: [
-                    pw.Container(width: double.infinity, height: 12, color: PdfColors.grey200),
-                    pw.FractionallySizedBox(
-                      widthFactor: frac.clamp(0.02, 1.0),
-                      child: pw.Container(height: 12, color: color),
-                    ),
-                  ],
+                child: pw.Container(
+                  height: 12,
+                  color: PdfColors.grey200,
+                  child: pw.Row(
+                    crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+                    children: [
+                      pw.Expanded(
+                        flex: (frac.clamp(0.02, 1.0) * 1000).round(),
+                        child: pw.Container(color: color),
+                      ),
+                      pw.Expanded(
+                        flex: (1000 - (frac.clamp(0.02, 1.0) * 1000).round())
+                            .clamp(0, 1000),
+                        child: pw.SizedBox(),
+                      ),
+                    ],
+                  ),
                 ),
               ),
               pw.SizedBox(width: 6),
