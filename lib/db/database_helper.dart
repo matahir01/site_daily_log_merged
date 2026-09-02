@@ -11,13 +11,14 @@ import '../models/material_stock_log.dart';
 import '../models/equipment_dipping_log.dart';
 import '../models/cash_float.dart';
 import '../models/diesel_activity_issuance.dart';
+import '../models/concrete_pour.dart';
 
 class DatabaseHelper {
   DatabaseHelper._internal();
   static final DatabaseHelper instance = DatabaseHelper._internal();
   static Database? _db;
 
-  static const int _dbVersion = 5;
+  static const int _dbVersion = 6;
 
   Future<Database> get database async {
     if (_db != null) return _db!;
@@ -117,6 +118,36 @@ class DatabaseHelper {
     await _createV3Tables(db);
     await _createV4Tables(db);
     await _createV5Tables(db);
+    await _createV6Tables(db);
+  }
+
+  Future<void> _createV6Tables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS concrete_pours (
+        id TEXT PRIMARY KEY,
+        daily_log_id TEXT NOT NULL,
+        element_name TEXT NOT NULL,
+        concrete_grade TEXT NOT NULL,
+        volume_m3 REAL NOT NULL DEFAULT 0.0,
+        slump_mm REAL,
+        cubes_cast INTEGER NOT NULL DEFAULT 0,
+        batch_ticket_no TEXT,
+        FOREIGN KEY (daily_log_id) REFERENCES daily_logs (id) ON DELETE CASCADE
+      )
+    ''');
+    // Engine-hour meter readings for machinery burn-rate calculations.
+    // equipment_dipping_logs is created by _createV3Tables (above) without
+    // these columns, so this ALTER is needed on both a fresh install and an
+    // upgrade from an older version. try/catch guards against ever running
+    // it twice against the same database.
+    for (final col in [
+      'opening_engine_hours REAL',
+      'closing_engine_hours REAL',
+    ]) {
+      try {
+        await db.execute('ALTER TABLE equipment_dipping_logs ADD COLUMN $col');
+      } catch (_) {}
+    }
   }
 
   Future<void> _createV5Tables(Database db) async {
@@ -253,6 +284,9 @@ class DatabaseHelper {
     }
     if (oldVersion < 5) {
       await _createV5Tables(db);
+    }
+    if (oldVersion < 6) {
+      await _createV6Tables(db);
     }
   }
 
@@ -624,6 +658,46 @@ class DatabaseHelper {
     ''', [siteId]);
   }
 
+  // ---------- Concrete Pours / Slump Test QC ----------
+  Future<void> insertConcretePour(ConcretePour c) async {
+    final db = await database;
+    await db.insert('concrete_pours', c.toMap());
+  }
+
+  Future<void> updateConcretePour(ConcretePour c) async {
+    final db = await database;
+    await db.update('concrete_pours', c.toMap(), where: 'id = ?', whereArgs: [c.id]);
+  }
+
+  Future<List<ConcretePour>> getConcretePoursForLog(String dailyLogId) async {
+    final db = await database;
+    final rows = await db.query('concrete_pours',
+        where: 'daily_log_id = ?', whereArgs: [dailyLogId]);
+    return rows.map((r) => ConcretePour.fromMap(r)).toList();
+  }
+
+  Future<void> deleteConcretePour(String id) async {
+    final db = await database;
+    await db.delete('concrete_pours', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> deleteConcretePoursForLog(String dailyLogId) async {
+    final db = await database;
+    await db.delete('concrete_pours', where: 'daily_log_id = ?', whereArgs: [dailyLogId]);
+  }
+
+  /// Every concrete pour row for a site, each tagged with its log's date —
+  /// used by the PDF/Excel report engines for the QC table.
+  Future<List<Map<String, dynamic>>> getConcretePoursForSite(String siteId) async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT c.*, l.date AS log_date FROM concrete_pours c
+      INNER JOIN daily_logs l ON c.daily_log_id = l.id
+      WHERE l.siteId = ?
+      ORDER BY l.date ASC, c.element_name ASC
+    ''', [siteId]);
+  }
+
   // ---------- Diesel Activity Issuance (non-dipped machines/activities) ----------
   Future<void> insertDieselActivityIssuance(DieselActivityIssuance d) async {
     final db = await database;
@@ -774,4 +848,125 @@ class DatabaseHelper {
     final db = await database;
     await db.delete('cash_floats', where: 'id = ?', whereArgs: [id]);
   }
+
+  // ---------- Phase 3: Advanced Analytics & Batch Export (date-range aware) ----------
+
+  /// Expenses for a site within an inclusive date range, ascending by date.
+  /// Used by the Analytics screen and batch export so both honor the same
+  /// customizable date range.
+  Future<List<Expense>> getExpensesForSiteInRange(
+      String siteId, DateTime start, DateTime end) async {
+    final db = await database;
+    final rows = await db.query(
+      'expenses',
+      where: 'siteId = ? AND date >= ? AND date <= ?',
+      whereArgs: [siteId, start.toIso8601String(), _endOfDay(end)],
+      orderBy: 'date ASC',
+    );
+    return rows.map((r) => Expense.fromMap(r)).toList();
+  }
+
+  /// Daily logs for a site within an inclusive date range, ascending by date.
+  Future<List<DailyLog>> getLogsForSiteInRange(
+      String siteId, DateTime start, DateTime end) async {
+    final db = await database;
+    final rows = await db.query(
+      'daily_logs',
+      where: 'siteId = ? AND date >= ? AND date <= ?',
+      whereArgs: [siteId, start.toIso8601String(), _endOfDay(end)],
+      orderBy: 'date ASC',
+    );
+    return rows.map((r) => DailyLog.fromMap(r)).toList();
+  }
+
+  /// Concrete pour volume (m³) and cube counts per day for a site within a
+  /// date range — powers the "Concrete Pour Volumes" analytics chart.
+  Future<List<Map<String, dynamic>>> getConcretePourTrendForSite(
+      String siteId, DateTime start, DateTime end) async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT l.date AS log_date,
+             SUM(c.volume_m3) AS total_volume,
+             SUM(c.cubes_cast) AS total_cubes
+      FROM concrete_pours c
+      INNER JOIN daily_logs l ON c.daily_log_id = l.id
+      WHERE l.siteId = ? AND l.date >= ? AND l.date <= ?
+      GROUP BY l.date
+      ORDER BY l.date ASC
+    ''', [siteId, start.toIso8601String(), _endOfDay(end)]);
+  }
+
+  /// Litres of diesel issued per day (dipped machines + ad-hoc activities
+  /// combined) for a site within a date range — powers the "Diesel
+  /// Consumption Rate" analytics chart.
+  Future<List<Map<String, dynamic>>> getDieselConsumptionTrendForSite(
+      String siteId, DateTime start, DateTime end) async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT l.date AS log_date,
+        COALESCE((SELECT SUM(e.diesel_issued_litres) FROM equipment_dipping_logs e
+                  WHERE e.daily_log_id = l.id), 0.0) AS machine_litres,
+        COALESCE((SELECT SUM(a.litres_issued) FROM diesel_activity_issuance a
+                  WHERE a.daily_log_id = l.id), 0.0) AS activity_litres
+      FROM daily_logs l
+      WHERE l.siteId = ? AND l.date >= ? AND l.date <= ?
+      ORDER BY l.date ASC
+    ''', [siteId, start.toIso8601String(), _endOfDay(end)]);
+  }
+
+  /// Daily worker-attendance status counts (Present/Absent/Half-Day) for a
+  /// site within a date range — powers the "Worker Attendance Trend" chart.
+  Future<List<Map<String, dynamic>>> getAttendanceTrendForSite(
+      String siteId, DateTime start, DateTime end) async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT l.date AS log_date, a.status AS status, COUNT(*) AS cnt
+      FROM daily_attendance a
+      INNER JOIN daily_logs l ON a.daily_log_id = l.id
+      WHERE l.siteId = ? AND l.date >= ? AND l.date <= ?
+      GROUP BY l.date, a.status
+      ORDER BY l.date ASC
+    ''', [siteId, start.toIso8601String(), _endOfDay(end)]);
+  }
+
+  /// Latest known closing balance per tracked material/equipment item for a
+  /// site (all-time, not range-scoped — a stock level is a running total,
+  /// not a range aggregate) — powers the "Material Stock Levels" KPI card.
+  Future<Map<String, Map<String, dynamic>>> getCurrentMaterialStockLevels(
+      String siteId) async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT m.item_name AS item, m.unit AS unit, m.closing_balance AS cb, l.date AS d
+      FROM material_stock_logs m
+      INNER JOIN daily_logs l ON m.daily_log_id = l.id
+      WHERE l.siteId = ?
+      ORDER BY l.date ASC
+    ''', [siteId]);
+    final latest = <String, Map<String, dynamic>>{};
+    for (final r in rows) {
+      latest[r['item'] as String] = {
+        'unit': r['unit'] as String? ?? '',
+        'balance': (r['cb'] as num?)?.toDouble() ?? 0.0,
+      };
+    }
+    return latest;
+  }
+
+  /// Cash floats for a site within an inclusive date range, ascending.
+  Future<List<CashFloat>> getCashFloatsForSiteInRange(
+      String siteId, DateTime start, DateTime end) async {
+    final db = await database;
+    final rows = await db.query(
+      'cash_floats',
+      where: 'site_id = ? AND date >= ? AND date <= ?',
+      whereArgs: [siteId, start.toIso8601String(), _endOfDay(end)],
+      orderBy: 'date ASC',
+    );
+    return rows.map((r) => CashFloat.fromMap(r)).toList();
+  }
+
+  /// End-of-day ISO bound (23:59:59.999) so a date-range query with an
+  /// end date of "today" still includes rows logged later today.
+  String _endOfDay(DateTime d) =>
+      DateTime(d.year, d.month, d.day, 23, 59, 59, 999).toIso8601String();
 }

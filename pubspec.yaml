@@ -44,6 +44,11 @@ dependencies:
   # --- Added: open linked Google Sheet in browser ---
   url_launcher: ^6.3.0
 
+  # --- Added: offline-first sync queue (Phase 3) ---
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  connectivity_plus: ^6.0.5
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -52,3 +57,16 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  # --- Added: custom TTF fonts for PDF generation (Option 2 Naira-glyph fix).
+  # The `pdf` package's built-in base14 fonts have no ₦ glyph, which renders
+  # as a missing-glyph box. Roboto's Regular/Bold weights are loaded via
+  # rootBundle in pdf_report_service.dart and set as the document's base
+  # font so every text widget — headers, tables, summary cards — renders ₦
+  # correctly instead of falling back to Helvetica.
+  fonts:
+    - family: Roboto
+      fonts:
+        - asset: assets/fonts/Roboto-Regular.ttf
+        - asset: assets/fonts/Roboto-Bold.ttf
+          weight: 700

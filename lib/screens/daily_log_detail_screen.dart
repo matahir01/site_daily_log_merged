@@ -10,6 +10,7 @@ import '../models/attendance.dart';
 import '../models/material_stock_log.dart';
 import '../models/equipment_dipping_log.dart';
 import '../models/diesel_activity_issuance.dart';
+import '../models/concrete_pour.dart';
 import '../models/cash_float.dart';
 import '../models/expense.dart';
 import '../models/worker.dart';
@@ -39,6 +40,7 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
   List<MaterialStockLog> _materials = [];
   List<EquipmentDippingLog> _equipment = [];
   List<DieselActivityIssuance> _dieselActivity = [];
+  List<ConcretePour> _concretePours = [];
   List<Expense> _expenses = [];
   List<Expense> _monthlyExpenses = [];
   CashFloat? _cashFloat;
@@ -56,6 +58,7 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
     final matData = await _db.getMaterialStockLogsForLog(widget.log.id);
     final eqData = await _db.getEquipmentDippingLogsForLog(widget.log.id);
     final dieselActivityData = await _db.getDieselActivityForLog(widget.log.id);
+    final concretePourData = await _db.getConcretePoursForLog(widget.log.id);
     final workerData = await _db.getWorkersForSite(widget.site.id, activeOnly: false);
     final dateIso = widget.log.date.toIso8601String().split('T').first;
     final expData = await _db.getExpensesForSiteAndDate(widget.site.id, dateIso);
@@ -68,6 +71,7 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
       _materials = matData;
       _equipment = eqData;
       _dieselActivity = dieselActivityData;
+      _concretePours = concretePourData;
       _workers = workerData;
       _expenses = expData;
       _monthlyExpenses = monthlyExpData;
@@ -89,6 +93,7 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
         expenses: _expenses,
         dieselActivity: _dieselActivity,
         monthlyExpenses: _monthlyExpenses,
+        concretePours: _concretePours,
         cashFloat: _cashFloat,
       );
       if (mounted) {

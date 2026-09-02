@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:math' as math;
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:intl/intl.dart';
@@ -13,6 +14,7 @@ import '../models/attendance.dart';
 import '../models/material_stock_log.dart';
 import '../models/equipment_dipping_log.dart';
 import '../models/diesel_activity_issuance.dart';
+import '../models/concrete_pour.dart';
 import '../models/cash_float.dart';
 import '../models/worker.dart';
 import '../utils/currency_formatter.dart';
@@ -24,54 +26,95 @@ class PdfReportService {
     return c.label;
   }
 
+  // ---- Naira-glyph fix (Option 2: custom TTF fonts) ----
+  //
+  // The `pdf` package's built-in base14 fonts (Helvetica etc.) have no ₦
+  // glyph, so any CurrencyFormatter.format() output rendered in the default
+  // font shows a missing-glyph box instead of the Naira sign. Roboto has a
+  // ₦ glyph, so we load it once via rootBundle and set it as the document's
+  // base/bold theme font — every pw.Text widget that doesn't explicitly
+  // override its font then inherits Roboto automatically, including
+  // headers, tables, and the cash-flow summary card.
+  //
+  // Cached after first load so repeated report generation in one app
+  // session doesn't re-read the asset bytes each time.
+  // Shared palette so the plain site/project reports can match the styled
+  // daily-log report instead of rendering as bare text.
+  static final PdfColor _navy = PdfColor.fromHex('#1A365D');
+  static final PdfColor _steelBlue = PdfColor.fromHex('#2B6CB0');
+  static final PdfColor _iceBlue = PdfColor.fromHex('#EBF8FF');
+  static final PdfColor _slateBorder = PdfColors.blueGrey200;
+
+  static pw.ThemeData? _cachedTheme;
+
+  static Future<pw.ThemeData> _loadTheme() async {
+    final cached = _cachedTheme;
+    if (cached != null) return cached;
+    final regularData = await rootBundle.load('assets/fonts/Roboto-Regular.ttf');
+    final boldData = await rootBundle.load('assets/fonts/Roboto-Bold.ttf');
+    final theme = pw.ThemeData.withFont(
+      base: pw.Font.ttf(regularData),
+      bold: pw.Font.ttf(boldData),
+    );
+    _cachedTheme = theme;
+    return theme;
+  }
+
   static Future<File> generateSiteReport({
     required Project project,
     required Site site,
     required List<DailyLog> logs,
     required List<Expense> expenses,
   }) async {
-    final doc = pw.Document();
+    final theme = await _loadTheme();
+    final doc = pw.Document(theme: theme);
     final dateFmt = DateFormat.yMMMd();
     final total = expenses.fold<double>(0, (sum, e) => sum + e.amount);
 
     doc.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(32),
+        header: (context) => _buildReportHeader(
+          'SITE REPORT',
+          site.name,
+          project.name,
+          site.address,
+        ),
+        footer: (context) => _buildFooter(context),
         build: (context) => [
-          _header(project.name, site.name, site.address),
-          pw.SizedBox(height: 20),
-          pw.Text(
-            'Daily Logs',
-            style: pw.TextStyle(
-              fontSize: 16,
-              fontWeight: pw.FontWeight.bold,
-            ),
-          ),
-          pw.Divider(),
-          if (logs.isEmpty) pw.Text('No daily logs recorded.'),
+          _sectionTitle('DAILY LOGS', _steelBlue),
+          pw.SizedBox(height: 8),
+          if (logs.isEmpty) _emptyCard('No daily logs recorded.'),
           ...logs.map((log) => _logBlock(log, dateFmt)),
-          pw.SizedBox(height: 20),
-          pw.Text(
-            'Expenses',
-            style: pw.TextStyle(
-              fontSize: 16,
-              fontWeight: pw.FontWeight.bold,
+          pw.NewPage(),
+          _sectionTitle('EXPENSES', _steelBlue),
+          pw.SizedBox(height: 8),
+          if (expenses.isEmpty) _emptyCard('No expenses recorded.'),
+          if (expenses.isNotEmpty) ...[
+            _buildTable(
+              headers: ['Date', 'Category', 'Amount', 'Note'],
+              rows: expenses
+                  .map((e) => [
+                        dateFmt.format(e.date),
+                        _categoryLabel(e.category),
+                        CurrencyFormatter.format(e.amount),
+                        e.note ?? '',
+                      ])
+                  .toList(),
+              navy: _navy,
+              iceBlue: _iceBlue,
+              slateBorder: _slateBorder,
+              columnWidths: {
+                0: const pw.FixedColumnWidth(70),
+                1: const pw.FlexColumnWidth(1.4),
+                2: const pw.FixedColumnWidth(70),
+                3: const pw.FlexColumnWidth(2.2),
+              },
             ),
-          ),
-          pw.Divider(),
-          if (expenses.isEmpty) pw.Text('No expenses recorded.'),
-          if (expenses.isNotEmpty) _expenseTable(expenses, dateFmt),
-          pw.SizedBox(height: 12),
-          pw.Align(
-            alignment: pw.Alignment.centerRight,
-            child: pw.Text(
-              'Total: ${CurrencyFormatter.format(total)}',
-              style: pw.TextStyle(
-                fontSize: 14,
-                fontWeight: pw.FontWeight.bold,
-              ),
-            ),
-          ),
+            pw.SizedBox(height: 8),
+            _totalBar('TOTAL', total, _navy),
+          ],
         ],
       ),
     );
@@ -85,7 +128,8 @@ class PdfReportService {
     required Map<String, List<DailyLog>> logsBySite,
     required Map<String, List<Expense>> expensesBySite,
   }) async {
-    final doc = pw.Document();
+    final theme = await _loadTheme();
+    final doc = pw.Document(theme: theme);
     final dateFmt = DateFormat.yMMMd();
 
     double projectTotal = 0;
@@ -96,43 +140,59 @@ class PdfReportService {
     doc.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(32),
+        header: (context) => _buildReportHeader(
+          'PROJECT REPORT',
+          project.name,
+          project.client,
+          '${sites.length} site${sites.length == 1 ? '' : 's'}',
+        ),
+        footer: (context) => _buildFooter(context),
         build: (context) => [
-          _header(project.name, project.client ?? 'Project Report', null),
-          pw.SizedBox(height: 8),
-          pw.Text(
-            'Total Project Expenses: ${CurrencyFormatter.format(projectTotal)}',
-            style: pw.TextStyle(
-              fontSize: 14,
-              fontWeight: pw.FontWeight.bold,
-            ),
-          ),
-          pw.SizedBox(height: 20),
+          _totalBar('TOTAL PROJECT EXPENSES', projectTotal, _navy),
           for (final site in sites) ...[
-            pw.Text(
-              site.name,
-              style: pw.TextStyle(
-                fontSize: 16,
-                fontWeight: pw.FontWeight.bold,
-              ),
-            ),
+            pw.NewPage(),
+            _sectionTitle(site.name.toUpperCase(), _steelBlue),
             if (site.address != null)
-              pw.Text(site.address!, style: const pw.TextStyle(fontSize: 10)),
-            pw.Divider(),
-            pw.Text(
-              'Daily Logs',
-              style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-            ),
+              pw.Text(site.address!, style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
+            pw.SizedBox(height: 10),
+            pw.Text('Daily Logs', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 12)),
+            pw.SizedBox(height: 6),
+            if ((logsBySite[site.id] ?? []).isEmpty) _emptyCard('No daily logs recorded.'),
             ...(logsBySite[site.id] ?? []).map((log) => _logBlock(log, dateFmt)),
-            pw.SizedBox(height: 8),
-            pw.Text(
-              'Expenses',
-              style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-            ),
-            if ((expensesBySite[site.id] ?? []).isNotEmpty)
-              _expenseTable(expensesBySite[site.id]!, dateFmt)
-            else
-              pw.Text('No expenses recorded.'),
-            pw.SizedBox(height: 20),
+            pw.SizedBox(height: 14),
+            pw.Text('Expenses', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 12)),
+            pw.SizedBox(height: 6),
+            if ((expensesBySite[site.id] ?? []).isEmpty)
+              _emptyCard('No expenses recorded.')
+            else ...[
+              _buildTable(
+                headers: ['Date', 'Category', 'Amount', 'Note'],
+                rows: (expensesBySite[site.id] ?? [])
+                    .map((e) => [
+                          dateFmt.format(e.date),
+                          _categoryLabel(e.category),
+                          CurrencyFormatter.format(e.amount),
+                          e.note ?? '',
+                        ])
+                    .toList(),
+                navy: _navy,
+                iceBlue: _iceBlue,
+                slateBorder: _slateBorder,
+                columnWidths: {
+                  0: const pw.FixedColumnWidth(70),
+                  1: const pw.FlexColumnWidth(1.4),
+                  2: const pw.FixedColumnWidth(70),
+                  3: const pw.FlexColumnWidth(2.2),
+                },
+              ),
+              pw.SizedBox(height: 8),
+              _totalBar(
+                'SITE TOTAL',
+                (expensesBySite[site.id] ?? []).fold<double>(0, (s, e) => s + e.amount),
+                _steelBlue,
+              ),
+            ],
           ],
         ],
       ),
@@ -154,9 +214,11 @@ class PdfReportService {
     required List<Expense> expenses,
     List<DieselActivityIssuance> dieselActivity = const [],
     List<Expense> monthlyExpenses = const [],
+    List<ConcretePour> concretePours = const [],
     CashFloat? cashFloat,
   }) async {
-    final pdf = pw.Document();
+    final theme = await _loadTheme();
+    final pdf = pw.Document(theme: theme);
     final navy = PdfColor.fromHex('#1A365D');
     final steelBlue = PdfColor.fromHex('#2B6CB0');
     final iceBlue = PdfColor.fromHex('#EBF8FF');
@@ -255,7 +317,7 @@ class PdfReportService {
                 }).toList(),
               ),
             ),
-          pw.SizedBox(height: 20),
+          pw.NewPage(),
           _sectionTitle('2. MATERIAL STOCK RECONCILIATION', steelBlue),
           pw.SizedBox(height: 8),
           if (materials.isEmpty)
@@ -290,7 +352,7 @@ class PdfReportService {
               },
             ),
           ],
-          pw.SizedBox(height: 20),
+          pw.NewPage(),
           _sectionTitle('3. EQUIPMENT DIPPING & FUEL LOG', steelBlue),
           pw.SizedBox(height: 8),
           if (equipment.isEmpty)
@@ -349,8 +411,28 @@ class PdfReportService {
               slateBorder: slateBorder,
             ),
           ],
-          pw.SizedBox(height: 20),
-          _sectionTitle('4. VISUAL ANALYTICS & CHARTS', steelBlue),
+          pw.NewPage(),
+          _sectionTitle('4. CONCRETE POUR & QUALITY CONTROL', steelBlue),
+          pw.SizedBox(height: 8),
+          if (concretePours.isEmpty)
+            _emptyCard('No concrete pours recorded for this date')
+          else
+            _buildTable(
+              headers: ['Element', 'Grade', 'Volume (m³)', 'Slump (mm)', 'Cubes Cast', 'Batch Ticket No'],
+              rows: concretePours.map((c) => [
+                c.elementName,
+                c.concreteGrade,
+                c.volumeM3.toStringAsFixed(2),
+                c.slumpMm?.toStringAsFixed(0) ?? '-',
+                '${c.cubesCast}',
+                c.batchTicketNo ?? '-',
+              ]).toList(),
+              navy: navy,
+              iceBlue: iceBlue,
+              slateBorder: slateBorder,
+            ),
+          pw.NewPage(),
+          _sectionTitle('5. VISUAL ANALYTICS & CHARTS', steelBlue),
           pw.SizedBox(height: 8),
           if (categoryTotals.isEmpty)
             _emptyCard('No expense data to chart for this date')
@@ -378,8 +460,8 @@ class PdfReportService {
             pw.SizedBox(height: 6),
             _lineChart(burnPoints, steelBlue),
           ],
-          pw.SizedBox(height: 20),
-          _sectionTitle('5. DAILY ITEMIZED EXPENSES LEDGER', steelBlue),
+          pw.NewPage(),
+          _sectionTitle('6. DAILY ITEMIZED EXPENSES LEDGER', steelBlue),
           pw.SizedBox(height: 8),
           if (expenses.isEmpty)
             _emptyCard('No expenses recorded')
@@ -406,39 +488,24 @@ class PdfReportService {
                   navy: navy,
                   iceBlue: iceBlue,
                   slateBorder: slateBorder,
+                  // S/N is fixed and narrow so it can never be squeezed out;
+                  // Description gets the largest flex share so long text
+                  // wraps within its own column instead of crowding S/N.
+                  columnWidths: {
+                    0: const pw.FixedColumnWidth(26),
+                    1: const pw.FlexColumnWidth(3.2),
+                    2: const pw.FlexColumnWidth(1.6),
+                    3: const pw.FixedColumnWidth(40),
+                    4: const pw.FlexColumnWidth(1.3),
+                    5: const pw.FlexColumnWidth(1.3),
+                  },
                 ),
                 pw.SizedBox(height: 8),
-                pw.Container(
-                  width: double.infinity,
-                  padding: const pw.EdgeInsets.all(12),
-                  decoration: pw.BoxDecoration(
-                    color: navy,
-                    borderRadius: pw.BorderRadius.circular(4),
-                  ),
-                  child: pw.Row(
-                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                    children: [
-                      pw.Text(
-                        'SUB-TOTAL',
-                        style: pw.TextStyle(
-                          color: PdfColors.white,
-                          fontWeight: pw.FontWeight.bold,
-                        ),
-                      ),
-                      pw.Text(
-                        CurrencyFormatter.format(totalExpenses),
-                        style: pw.TextStyle(
-                          color: PdfColors.white,
-                          fontWeight: pw.FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                _totalBar('SUB-TOTAL', totalExpenses, navy),
               ],
             ),
-          pw.SizedBox(height: 20),
-          _sectionTitle('6. CASH FLOW RECONCILIATION', steelBlue),
+          pw.NewPage(),
+          _sectionTitle('7. CASH FLOW RECONCILIATION', steelBlue),
           pw.SizedBox(height: 8),
           pw.Container(
             padding: const pw.EdgeInsets.all(16),
@@ -565,31 +632,6 @@ class PdfReportService {
     return _saveDoc(pdf, '${site.name}_daily_${log.id.substring(0, 8)}');
   }
 
-  static pw.Widget _header(String title, String subtitle, String? extra) {
-    return pw.Column(
-      crossAxisAlignment: pw.CrossAxisAlignment.start,
-      children: [
-        pw.Text(
-          title,
-          style: pw.TextStyle(
-            fontSize: 22,
-            fontWeight: pw.FontWeight.bold,
-          ),
-        ),
-        pw.Text(subtitle, style: const pw.TextStyle(fontSize: 14)),
-        if (extra != null)
-          pw.Text(extra, style: const pw.TextStyle(fontSize: 10)),
-        pw.Text(
-          'Generated: ${DateFormat.yMMMd().add_jm().format(DateTime.now())}',
-          style: const pw.TextStyle(
-            fontSize: 9,
-            color: PdfColors.grey600,
-          ),
-        ),
-      ],
-    );
-  }
-
   static pw.Widget _buildDailyHeader(
     PdfColor navy,
     String siteName,
@@ -668,6 +710,78 @@ class PdfReportService {
     );
   }
 
+  /// A full-width colored bar with a label on the left and a currency
+  /// amount on the right — used for sub-totals and grand totals.
+  static pw.Widget _totalBar(String label, double amount, PdfColor color) {
+    return pw.Container(
+      width: double.infinity,
+      padding: const pw.EdgeInsets.all(12),
+      decoration: pw.BoxDecoration(
+        color: color,
+        borderRadius: pw.BorderRadius.circular(4),
+      ),
+      child: pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        children: [
+          pw.Text(
+            label,
+            style: pw.TextStyle(color: PdfColors.white, fontWeight: pw.FontWeight.bold),
+          ),
+          pw.Text(
+            CurrencyFormatter.format(amount),
+            style: pw.TextStyle(color: PdfColors.white, fontWeight: pw.FontWeight.bold),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Navy banner header shared by the site and project reports, styled to
+  /// match the daily-log report instead of the old plain-text header.
+  static pw.Widget _buildReportHeader(
+    String kicker,
+    String title,
+    String? subtitle1,
+    String? subtitle2,
+  ) {
+    return pw.Container(
+      width: double.infinity,
+      padding: const pw.EdgeInsets.all(16),
+      decoration: pw.BoxDecoration(color: _navy),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            kicker,
+            style: pw.TextStyle(
+              color: PdfColors.white,
+              fontSize: 11,
+              fontWeight: pw.FontWeight.bold,
+            ),
+          ),
+          pw.SizedBox(height: 4),
+          pw.Text(
+            title,
+            style: pw.TextStyle(
+              color: PdfColors.white,
+              fontSize: 20,
+              fontWeight: pw.FontWeight.bold,
+            ),
+          ),
+          if (subtitle1 != null && subtitle1.isNotEmpty)
+            pw.Text(subtitle1, style: const pw.TextStyle(color: PdfColors.white, fontSize: 12)),
+          if (subtitle2 != null && subtitle2.isNotEmpty)
+            pw.Text(subtitle2, style: const pw.TextStyle(color: PdfColors.white, fontSize: 10)),
+          pw.SizedBox(height: 4),
+          pw.Text(
+            'Generated: ${DateFormat.yMMMd().add_jm().format(DateTime.now())}',
+            style: const pw.TextStyle(color: PdfColors.white, fontSize: 9),
+          ),
+        ],
+      ),
+    );
+  }
+
   static pw.Widget _emptyCard(String text) {
     return pw.Container(
       padding: const pw.EdgeInsets.all(12),
@@ -682,10 +796,11 @@ class PdfReportService {
     required PdfColor navy,
     required PdfColor iceBlue,
     required PdfColor slateBorder,
+    Map<int, pw.TableColumnWidth>? columnWidths,
   }) {
     return pw.Table(
       border: pw.TableBorder.all(color: slateBorder, width: 0.5),
-      columnWidths: {0: const pw.FlexColumnWidth(2)},
+      columnWidths: columnWidths ?? {0: const pw.FlexColumnWidth(2)},
       children: [
         pw.TableRow(
           decoration: pw.BoxDecoration(color: navy),
@@ -1009,26 +1124,6 @@ class PdfReportService {
             ),
         ],
       ),
-    );
-  }
-
-  static pw.Widget _expenseTable(List<Expense> expenses, DateFormat dateFmt) {
-    return pw.TableHelper.fromTextArray(
-      headers: ['Date', 'Category', 'Amount', 'Note'],
-      data: expenses
-          .map((e) => [
-                dateFmt.format(e.date),
-                _categoryLabel(e.category),
-                CurrencyFormatter.format(e.amount),
-                e.note ?? '',
-              ])
-          .toList(),
-      headerStyle: pw.TextStyle(
-        fontWeight: pw.FontWeight.bold,
-        fontSize: 10,
-      ),
-      cellStyle: const pw.TextStyle(fontSize: 9),
-      cellAlignment: pw.Alignment.centerLeft,
     );
   }
 

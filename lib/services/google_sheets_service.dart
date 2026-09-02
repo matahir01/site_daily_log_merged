@@ -5,6 +5,7 @@ import '../models/site.dart';
 import '../models/expense.dart';
 import '../models/cash_float.dart';
 import 'google_auth.dart';
+import 'offline_queue_service.dart';
 
 /// Current sync state for a site's linked Google Sheet, read from the
 /// local `sheet_sync` table.
@@ -113,41 +114,76 @@ class GoogleSheetsService {
     );
   }
 
+  /// Registers this service's queue handler once at app startup so a
+  /// silent auto-sync push that failed offline gets replayed by
+  /// [SyncEngine.runSync] once connectivity returns, instead of being lost.
+  static void registerQueueHandler() {
+    OfflineQueueService.instance.registerHandler(QueueTarget.sheets, (action) async {
+      final siteId = action.payload['siteId'] as String;
+      await _pushNow(siteId);
+    });
+  }
+
   /// Silent, background push used right after a save completes elsewhere
   /// in the app. Never shows a sign-in prompt — if there's no existing
   /// Google session, or the site isn't linked/auto-sync isn't on, this
-  /// quietly does nothing. Errors are recorded but never surfaced as a
-  /// popup, since this runs unattended after routine saves.
+  /// quietly does nothing. If the device is offline (or the push fails),
+  /// the push is queued instead of just recording an error string, so it
+  /// replays automatically once connectivity returns.
   static Future<void> autoSyncSite(String siteId) async {
     final status = await getStatus(siteId);
     if (!status.autoSync || status.spreadsheetId == null) return;
 
-    try {
-      final account = await GoogleAuth.signInSilentlyOnly();
-      if (account == null) {
-        await DatabaseHelper.instance.upsertSheetSync(
-          siteId: siteId,
-          lastSyncError: 'Not signed in to Google — open Sheets Sync to reconnect.',
-        );
-        return;
-      }
-      final api = await GoogleAuth.sheetsApiFor(account);
-      final site = await DatabaseHelper.instance.getSiteById(siteId);
-      if (site == null) return;
-
-      await _pushAllData(api, status.spreadsheetId!, site);
-
+    if (!await OfflineQueueService.instance.isOnline) {
+      await OfflineQueueService.instance.enqueue(
+        target: QueueTarget.sheets,
+        op: QueueOp.update,
+        entityType: 'site_push',
+        payload: {'siteId': siteId},
+      );
       await DatabaseHelper.instance.upsertSheetSync(
         siteId: siteId,
-        lastSyncedAt: DateTime.now().toIso8601String(),
-        lastSyncError: null,
+        lastSyncError: 'Offline — queued for sync when connection returns.',
       );
+      return;
+    }
+
+    try {
+      await _pushNow(siteId);
     } catch (e) {
+      await OfflineQueueService.instance.enqueue(
+        target: QueueTarget.sheets,
+        op: QueueOp.update,
+        entityType: 'site_push',
+        payload: {'siteId': siteId},
+      );
       await DatabaseHelper.instance.upsertSheetSync(
         siteId: siteId,
         lastSyncError: e.toString(),
       );
     }
+  }
+
+  /// Shared push implementation used by both the direct path and the
+  /// queued-replay path, so retries hit exactly the same logic.
+  static Future<void> _pushNow(String siteId) async {
+    final status = await getStatus(siteId);
+    if (status.spreadsheetId == null) return;
+    final account = await GoogleAuth.signInSilentlyOnly();
+    if (account == null) {
+      throw Exception('Not signed in to Google — open Sheets Sync to reconnect.');
+    }
+    final api = await GoogleAuth.sheetsApiFor(account);
+    final site = await DatabaseHelper.instance.getSiteById(siteId);
+    if (site == null) return;
+
+    await _pushAllData(api, status.spreadsheetId!, site);
+
+    await DatabaseHelper.instance.upsertSheetSync(
+      siteId: siteId,
+      lastSyncedAt: DateTime.now().toIso8601String(),
+      lastSyncError: null,
+    );
   }
 
   static Future<void> _ensureTabsExist(sheets.SheetsApi api, String spreadsheetId) async {
