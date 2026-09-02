@@ -9,8 +9,6 @@ import '../models/expense.dart';
 import '../models/material_item.dart';
 import '../services/pdf_report_service.dart';
 import '../services/excel_export_service.dart';
-import '../services/batch_export_service.dart';
-import '../widgets/sync_status_badge.dart';
 import 'site_detail_screen.dart';
 
 class ProjectDashboardScreen extends StatefulWidget {
@@ -28,7 +26,6 @@ class _ProjectDashboardScreenState extends State<ProjectDashboardScreen> {
   final _addressController = TextEditingController();
   bool _generatingPdf = false;
   bool _generatingExcel = false;
-  bool _generatingBatch = false;
 
   @override
   void initState() {
@@ -114,73 +111,6 @@ class _ProjectDashboardScreenState extends State<ProjectDashboardScreen> {
     }
   }
 
-  /// Batch reporting (Phase 3): lets the user pick a date range and a
-  /// PDF/Excel/both format, then aggregates daily logs, concrete pours,
-  /// dipping logs, and the expense ledger across every site in the
-  /// project into a single combined report package.
-  Future<void> _batchExportProject() async {
-    if (_sites.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Add at least one site before running a batch export')),
-      );
-      return;
-    }
-
-    final now = DateTime.now();
-    final range = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(2020),
-      lastDate: now,
-      initialDateRange: DateTimeRange(start: DateTime(now.year, now.month, 1), end: now),
-      helpText: 'Select batch report period',
-    );
-    if (range == null || !mounted) return;
-
-    final format = await showModalBottomSheet<BatchExportFormat>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.picture_as_pdf),
-              title: const Text('PDF report'),
-              onTap: () => Navigator.pop(ctx, BatchExportFormat.pdf),
-            ),
-            ListTile(
-              leading: const Icon(Icons.table_chart),
-              title: const Text('Excel workbook'),
-              onTap: () => Navigator.pop(ctx, BatchExportFormat.excel),
-            ),
-            ListTile(
-              leading: const Icon(Icons.folder_zip_outlined),
-              title: const Text('Both (PDF + Excel)'),
-              onTap: () => Navigator.pop(ctx, BatchExportFormat.both),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (format == null || !mounted) return;
-
-    setState(() => _generatingBatch = true);
-    try {
-      await BatchExportService.generateAndShareProjectBatchReport(
-        context: context,
-        project: widget.project,
-        sites: _sites,
-        startDate: range.start,
-        endDate: range.end,
-        format: format,
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Batch export failed: $e')));
-      }
-    } finally {
-      if (mounted) setState(() => _generatingBatch = false);
-    }
-  }
-
   Future<void> _addSite() async {
     if (_nameController.text.trim().isEmpty) return;
     final site = Site(
@@ -258,18 +188,6 @@ class _ProjectDashboardScreenState extends State<ProjectDashboardScreen> {
       appBar: AppBar(
         title: Text(widget.project.name),
         actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 4),
-            child: Center(child: SyncStatusBadge(compact: true)),
-          ),
-          const SyncNowButton(),
-          IconButton(
-            icon: _generatingBatch
-                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.folder_zip_outlined),
-            tooltip: 'Batch export (date range)',
-            onPressed: _generatingBatch ? null : _batchExportProject,
-          ),
           IconButton(
             icon: _generatingPdf
                 ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
@@ -291,38 +209,31 @@ class _ProjectDashboardScreenState extends State<ProjectDashboardScreen> {
             ),
         ],
       ),
-      body: Column(
-        children: [
-          const SyncStatusBanner(),
-          Expanded(
-            child: _sites.isEmpty
-                ? const Center(child: Text('No sites yet. Tap + to add a site.'))
-                : ListView.builder(
-                    itemCount: _sites.length,
-                    itemBuilder: (ctx, i) {
-                      final s = _sites[i];
-                      return Card(
-                        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        child: ListTile(
-                          title: Text(s.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                          subtitle: s.address != null ? Text(s.address!) : null,
-                          trailing: IconButton(
-                            icon: const Icon(Icons.delete_outline),
-                            onPressed: () => _deleteSite(s.id),
-                          ),
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => SiteDetailScreen(site: s, project: widget.project),
-                            ),
-                          ),
-                        ),
-                      );
-                    },
+      body: _sites.isEmpty
+          ? const Center(child: Text('No sites yet. Tap + to add a site.'))
+         : ListView.builder(
+              itemCount: _sites.length,
+              itemBuilder: (ctx, i) {
+                final s = _sites[i];
+                return Card(
+                  margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  child: ListTile(
+                    title: Text(s.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: s.address != null ? Text(s.address!) : null,
+                    trailing: IconButton(
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: () => _deleteSite(s.id),
+                    ),
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => SiteDetailScreen(site: s, project: widget.project),
+                      ),
+                    ),
                   ),
-          ),
-        ],
-      ),
+                );
+              },
+            ),
       floatingActionButton: FloatingActionButton(
         onPressed: _showAddDialog,
         child: const Icon(Icons.add),

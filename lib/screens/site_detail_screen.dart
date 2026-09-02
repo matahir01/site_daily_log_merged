@@ -9,9 +9,7 @@ import '../models/expense.dart';
 import '../models/material_item.dart';
 import '../services/pdf_report_service.dart';
 import '../services/excel_export_service.dart';
-import '../services/batch_export_service.dart';
 import '../utils/currency_formatter.dart';
-import '../widgets/sync_status_badge.dart';
 import 'add_daily_log_screen.dart';
 import 'add_expense_screen.dart';
 import 'attendance_screen.dart';
@@ -45,7 +43,6 @@ class _SiteDetailScreenState extends State<SiteDetailScreen> {
   bool _hasTodayFloat = false;
   bool _generatingPdf = false;
   bool _generatingExcel = false;
-  bool _generatingBatch = false;
 
   @override
   void initState() {
@@ -133,65 +130,6 @@ class _SiteDetailScreenState extends State<SiteDetailScreen> {
     }
   }
 
-  /// Batch reporting (Phase 3): user picks a date range and a format,
-  /// then daily logs, concrete pours, dipping logs, and the expense
-  /// ledger for that range are combined into a single PDF/Excel package.
-  Future<void> _batchExportSite() async {
-    final now = DateTime.now();
-    final range = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(2020),
-      lastDate: now,
-      initialDateRange: DateTimeRange(start: DateTime(now.year, now.month, 1), end: now),
-      helpText: 'Select batch report period',
-    );
-    if (range == null || !mounted) return;
-
-    final format = await showModalBottomSheet<BatchExportFormat>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.picture_as_pdf),
-              title: const Text('PDF report'),
-              onTap: () => Navigator.pop(ctx, BatchExportFormat.pdf),
-            ),
-            ListTile(
-              leading: const Icon(Icons.table_chart),
-              title: const Text('Excel workbook'),
-              onTap: () => Navigator.pop(ctx, BatchExportFormat.excel),
-            ),
-            ListTile(
-              leading: const Icon(Icons.folder_zip_outlined),
-              title: const Text('Both (PDF + Excel)'),
-              onTap: () => Navigator.pop(ctx, BatchExportFormat.both),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (format == null || !mounted) return;
-
-    setState(() => _generatingBatch = true);
-    try {
-      await BatchExportService.generateAndShareSiteBatchReport(
-        context: context,
-        project: widget.project,
-        site: widget.site,
-        startDate: range.start,
-        endDate: range.end,
-        format: format,
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Batch export failed: $e')));
-      }
-    } finally {
-      if (mounted) setState(() => _generatingBatch = false);
-    }
-  }
-
   Future<void> _confirmDelete(String title, VoidCallback onConfirmed) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -223,18 +161,6 @@ class _SiteDetailScreenState extends State<SiteDetailScreen> {
         appBar: AppBar(
           title: Text(widget.site.name),
           actions: [
-            Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: Center(child: SyncStatusBadge(compact: true)),
-            ),
-            const SyncNowButton(),
-            IconButton(
-              icon: _generatingBatch
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.folder_zip_outlined),
-              tooltip: 'Batch export (date range)',
-              onPressed: _generatingBatch ? null : _batchExportSite,
-            ),
             IconButton(
               icon: _generatingPdf
                   ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
@@ -255,17 +181,10 @@ class _SiteDetailScreenState extends State<SiteDetailScreen> {
             Tab(text: 'Expenses', icon: Icon(Icons.attach_money)),
           ]),
         ),
-        body: Column(
+        body: TabBarView(
           children: [
-            const SyncStatusBanner(),
-            Expanded(
-              child: TabBarView(
-                children: [
-                  _buildDailyLogsTab(),
-                  _buildExpensesTab(),
-                ],
-              ),
-            ),
+            _buildDailyLogsTab(),
+            _buildExpensesTab(),
           ],
         ),
         floatingActionButton: Builder(
@@ -501,12 +420,7 @@ class _SiteDetailScreenState extends State<SiteDetailScreen> {
               label: 'Analytics',
               icon: Icons.analytics,
               color: Colors.deepPurple,
-              onTap: () => _navigate(AnalyticsScreen(
-                siteId: widget.site.id,
-                siteName: widget.site.name,
-                project: widget.project,
-                site: widget.site,
-              )),
+              onTap: () => _navigate(AnalyticsScreen(siteId: widget.site.id, siteName: widget.site.name)),
             ),
             _ActionButton(
               label: 'Sheets Sync',
