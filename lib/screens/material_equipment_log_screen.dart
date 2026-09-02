@@ -5,6 +5,7 @@ import '../models/daily_log.dart';
 import '../models/material_stock_log.dart';
 import '../models/equipment_dipping_log.dart';
 import '../models/diesel_activity_issuance.dart';
+import '../models/concrete_pour.dart';
 import '../services/google_sheets_service.dart';
 
 /// One editable row for diesel issued to a non-dipped activity/machine
@@ -21,6 +22,41 @@ class _ActivityDieselRow {
   void dispose() {
     nameCtrl.dispose();
     litresCtrl.dispose();
+  }
+}
+
+/// One editable row for a single concrete pour / slump-test QC record.
+class _ConcretePourRow {
+  String? id;
+  final TextEditingController elementCtrl;
+  final TextEditingController gradeCtrl;
+  final TextEditingController volumeCtrl;
+  final TextEditingController slumpCtrl;
+  final TextEditingController cubesCtrl;
+  final TextEditingController batchCtrl;
+
+  _ConcretePourRow({
+    this.id,
+    String element = '',
+    String grade = '',
+    String volume = '',
+    String slump = '',
+    String cubes = '',
+    String batch = '',
+  })  : elementCtrl = TextEditingController(text: element),
+        gradeCtrl = TextEditingController(text: grade),
+        volumeCtrl = TextEditingController(text: volume),
+        slumpCtrl = TextEditingController(text: slump),
+        cubesCtrl = TextEditingController(text: cubes),
+        batchCtrl = TextEditingController(text: batch);
+
+  void dispose() {
+    elementCtrl.dispose();
+    gradeCtrl.dispose();
+    volumeCtrl.dispose();
+    slumpCtrl.dispose();
+    cubesCtrl.dispose();
+    batchCtrl.dispose();
   }
 }
 
@@ -78,13 +114,14 @@ class _MaterialEquipmentLogScreenState
   final Map<String, TextEditingController> _eqOil = {};
 
   final List<_ActivityDieselRow> _activityRows = [];
+  final List<_ConcretePourRow> _concreteRows = [];
 
   double _num(TextEditingController c) => double.tryParse(c.text) ?? 0.0;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     _initialize();
   }
 
@@ -160,6 +197,19 @@ class _MaterialEquipmentLogScreenState
       _activityRows.add(row);
     }
 
+    final existingConcrete = await _db.getConcretePoursForLog(_dailyLogId!);
+    for (final c in existingConcrete) {
+      _concreteRows.add(_ConcretePourRow(
+        id: c.id,
+        element: c.elementName,
+        grade: c.concreteGrade,
+        volume: c.volumeM3.toString(),
+        slump: c.slumpMm?.toString() ?? '',
+        cubes: c.cubesCast.toString(),
+        batch: c.batchTicketNo ?? '',
+      ));
+    }
+
     for (final item in _materialItems) {
       final name = item['name']!;
       final lastBal = await _db.getLastClosingBalance(widget.siteId, name);
@@ -202,6 +252,17 @@ class _MaterialEquipmentLogScreenState
     setState(() {
       _activityRows[index].dispose();
       _activityRows.removeAt(index);
+    });
+  }
+
+  void _addConcreteRow() {
+    setState(() => _concreteRows.add(_ConcretePourRow()));
+  }
+
+  void _removeConcreteRow(int index) {
+    setState(() {
+      _concreteRows[index].dispose();
+      _concreteRows.removeAt(index);
     });
   }
 
@@ -264,10 +325,30 @@ class _MaterialEquipmentLogScreenState
     }
   }
 
+  Future<void> _saveConcretePours() async {
+    if (_dailyLogId == null) return;
+    await _db.deleteConcretePoursForLog(_dailyLogId!);
+    for (final row in _concreteRows) {
+      if (row.elementCtrl.text.trim().isEmpty) continue;
+      final pour = ConcretePour(
+        id: const Uuid().v4(),
+        dailyLogId: _dailyLogId!,
+        elementName: row.elementCtrl.text.trim(),
+        concreteGrade: row.gradeCtrl.text.trim(),
+        volumeM3: double.tryParse(row.volumeCtrl.text) ?? 0.0,
+        slumpMm: double.tryParse(row.slumpCtrl.text),
+        cubesCast: int.tryParse(row.cubesCtrl.text) ?? 0,
+        batchTicketNo: row.batchCtrl.text.trim().isEmpty ? null : row.batchCtrl.text.trim(),
+      );
+      await _db.insertConcretePour(pour);
+    }
+  }
+
   Future<void> _saveAll() async {
     await _saveMaterialLogs();
     await _saveEquipmentLogs();
     await _saveActivityDiesel();
+    await _saveConcretePours();
     GoogleSheetsService.autoSyncSite(widget.siteId);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -289,6 +370,7 @@ class _MaterialEquipmentLogScreenState
           tabs: const [
             Tab(icon: Icon(Icons.inventory_2), text: 'Material Stock'),
             Tab(icon: Icon(Icons.local_gas_station), text: 'Equipment Dip'),
+            Tab(icon: Icon(Icons.grain), text: 'Concrete Pour'),
           ],
         ),
         actions: [
@@ -306,6 +388,7 @@ class _MaterialEquipmentLogScreenState
               children: [
                 _buildMaterialTab(),
                 _buildEquipmentTab(),
+                _buildConcretePourTab(),
               ],
             ),
     );
@@ -620,6 +703,120 @@ class _MaterialEquipmentLogScreenState
     );
   }
 
+  Widget _buildConcretePourTab() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.grain, color: Colors.brown.shade700),
+              const SizedBox(width: 8),
+              const Text(
+                'Concrete Pour & Quality Control',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: _addConcreteRow,
+                icon: const Icon(Icons.add),
+                label: const Text('Add'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Log each element poured today — e.g. Abutment Wall, Grade C30, 12.5m³.',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+          ),
+          const SizedBox(height: 12),
+          ..._concreteRows.asMap().entries.map((entry) {
+            final i = entry.key;
+            final row = entry.value;
+            return Card(
+              margin: const EdgeInsets.only(bottom: 12),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: row.elementCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Element (e.g. Abutment Wall)',
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: () => _removeConcreteRow(i),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: row.gradeCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Grade (e.g. C25)',
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _buildNumberField(row.volumeCtrl, 'Volume (m³)'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildNumberField(row.slumpCtrl, 'Slump (mm)'),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _buildNumberField(row.cubesCtrl, 'Cubes Cast'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: row.batchCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Batch Ticket No',
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+          if (_concreteRows.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                'No concrete pours logged for today yet.',
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildNumberField(TextEditingController controller, String label) {
     return TextField(
       controller: controller,
@@ -664,6 +861,7 @@ class _MaterialEquipmentLogScreenState
     for (final c in _eqDiesel.values) c.dispose();
     for (final c in _eqOil.values) c.dispose();
     for (final row in _activityRows) row.dispose();
+    for (final row in _concreteRows) row.dispose();
     super.dispose();
   }
 }

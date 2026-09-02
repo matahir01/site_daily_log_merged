@@ -202,8 +202,8 @@ class PdfReportService {
   }
 
   /// Generates a single daily-log "executive report" with navy/steel-blue
-  /// styling, including work activities, attendance, materials, equipment,
-  /// expenses, and a cash-flow summary.
+  /// styling, including work activities, site photographs, materials,
+  /// equipment, expenses, and a cash-flow summary.
   static Future<File> generateDailyLogReport({
     required Site site,
     required DailyLog log,
@@ -318,7 +318,30 @@ class PdfReportService {
               ),
             ),
           pw.NewPage(),
-          _sectionTitle('2. MATERIAL STOCK RECONCILIATION', steelBlue),
+          _sectionTitle('2. SITE PHOTOGRAPHS', steelBlue),
+          pw.SizedBox(height: 8),
+          if (log.photoPaths.isEmpty)
+            _emptyCard('No photos captured for this date')
+          else
+            pw.Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: log.photoPaths.map((path) {
+                final file = File(path);
+                if (!file.existsSync()) return pw.SizedBox();
+                return pw.Container(
+                  decoration: pw.BoxDecoration(border: pw.Border.all(color: slateBorder)),
+                  child: pw.Image(
+                    pw.MemoryImage(file.readAsBytesSync()),
+                    width: 150,
+                    height: 150,
+                    fit: pw.BoxFit.cover,
+                  ),
+                );
+              }).toList(),
+            ),
+          pw.NewPage(),
+          _sectionTitle('3. MATERIAL STOCK RECONCILIATION', steelBlue),
           pw.SizedBox(height: 8),
           if (materials.isEmpty)
             _emptyCard('No material stock records')
@@ -353,7 +376,7 @@ class PdfReportService {
             ),
           ],
           pw.NewPage(),
-          _sectionTitle('3. EQUIPMENT DIPPING & FUEL LOG', steelBlue),
+          _sectionTitle('4. EQUIPMENT DIPPING & FUEL LOG', steelBlue),
           pw.SizedBox(height: 8),
           if (equipment.isEmpty)
             _emptyCard('No equipment dipping records')
@@ -412,7 +435,7 @@ class PdfReportService {
             ),
           ],
           pw.NewPage(),
-          _sectionTitle('4. CONCRETE POUR & QUALITY CONTROL', steelBlue),
+          _sectionTitle('5. CONCRETE POUR & QUALITY CONTROL', steelBlue),
           pw.SizedBox(height: 8),
           if (concretePours.isEmpty)
             _emptyCard('No concrete pours recorded for this date')
@@ -432,7 +455,7 @@ class PdfReportService {
               slateBorder: slateBorder,
             ),
           pw.NewPage(),
-          _sectionTitle('5. VISUAL ANALYTICS & CHARTS', steelBlue),
+          _sectionTitle('6. VISUAL ANALYTICS & CHARTS', steelBlue),
           pw.SizedBox(height: 8),
           if (categoryTotals.isEmpty)
             _emptyCard('No expense data to chart for this date')
@@ -461,7 +484,7 @@ class PdfReportService {
             _lineChart(burnPoints, steelBlue),
           ],
           pw.NewPage(),
-          _sectionTitle('6. DAILY ITEMIZED EXPENSES LEDGER', steelBlue),
+          _sectionTitle('7. DAILY ITEMIZED EXPENSES LEDGER', steelBlue),
           pw.SizedBox(height: 8),
           if (expenses.isEmpty)
             _emptyCard('No expenses recorded')
@@ -505,7 +528,7 @@ class PdfReportService {
               ],
             ),
           pw.NewPage(),
-          _sectionTitle('7. CASH FLOW RECONCILIATION', steelBlue),
+          _sectionTitle('8. CASH FLOW RECONCILIATION', steelBlue),
           pw.SizedBox(height: 8),
           pw.Container(
             padding: const pw.EdgeInsets.all(16),
