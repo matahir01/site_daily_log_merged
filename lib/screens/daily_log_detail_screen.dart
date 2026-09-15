@@ -5,7 +5,9 @@ import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import '../db/database_helper.dart';
 import '../models/daily_log.dart';
+import '../models/daily_site_report_meta.dart';
 import '../models/site.dart';
+import '../models/project.dart';
 import '../models/attendance.dart';
 import '../models/material_stock_log.dart';
 import '../models/equipment_dipping_log.dart';
@@ -15,10 +17,11 @@ import '../models/cash_float.dart';
 import '../models/expense.dart';
 import '../models/worker.dart';
 import '../utils/currency_formatter.dart';
-import '../services/pdf_report_service.dart';
+import '../services/daily_site_report_store.dart';
+import '../services/professional_daily_report_service.dart';
 
 /// Read-only daily log detail with attendance, materials, equipment,
-/// expenses, and a one-tap PDF export.
+/// concrete/QC, expenses, professional report metadata, and one-tap PDF export.
 class DailyLogDetailScreen extends StatefulWidget {
   final DailyLog log;
   final Site site;
@@ -42,8 +45,9 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
   List<DieselActivityIssuance> _dieselActivity = [];
   List<ConcretePour> _concretePours = [];
   List<Expense> _expenses = [];
-  List<Expense> _monthlyExpenses = [];
   CashFloat? _cashFloat;
+  DailySiteReportMeta? _reportMeta;
+  Project? _project;
   bool _isLoading = true;
   bool _generatingPdf = false;
 
@@ -62,10 +66,12 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
     final workerData = await _db.getWorkersForSite(widget.site.id, activeOnly: false);
     final dateIso = widget.log.date.toIso8601String().split('T').first;
     final expData = await _db.getExpensesForSiteAndDate(widget.site.id, dateIso);
-    final monthKey = dateIso.substring(0, 7);
-    final monthlyExpData = await _db.getExpensesByMonth(widget.site.id, monthKey);
     final cashFloatData = await _db.getCashFloatBySiteAndDate(widget.site.id, dateIso);
+    final metaData = await DailySiteReportStore.instance.getForLog(widget.log.id);
+    final projects = await _db.getProjects();
+    final project = projects.firstWhereOrNull((p) => p.id == widget.site.projectId);
 
+    if (!mounted) return;
     setState(() {
       _attendance = attData;
       _materials = matData;
@@ -74,8 +80,9 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
       _concretePours = concretePourData;
       _workers = workerData;
       _expenses = expData;
-      _monthlyExpenses = monthlyExpData;
       _cashFloat = cashFloatData;
+      _reportMeta = metaData;
+      _project = project;
       _isLoading = false;
     });
   }
@@ -83,16 +90,17 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
   Future<void> _generatePdf() async {
     setState(() => _generatingPdf = true);
     try {
-      final file = await PdfReportService.generateDailyLogReport(
+      final file = await ProfessionalDailyReportService.generate(
         site: widget.site,
+        project: _project,
         log: widget.log,
+        meta: _reportMeta,
         attendance: _attendance,
         workers: _workers,
         materials: _materials,
         equipment: _equipment,
         expenses: _expenses,
         dieselActivity: _dieselActivity,
-        monthlyExpenses: _monthlyExpenses,
         concretePours: _concretePours,
         cashFloat: _cashFloat,
       );
@@ -100,7 +108,7 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
         await SharePlus.instance.share(
           ShareParams(
             files: [XFile(file.path)],
-            text: 'Site Daily Report — ${widget.site.name}',
+            text: 'Daily Site Progress Report — ${widget.site.name}',
           ),
         );
       }
@@ -125,10 +133,14 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
     return w?.role ?? '';
   }
 
+  String _metaText(String? value, {String empty = 'Not recorded'}) {
+    final text = value?.trim() ?? '';
+    return text.isEmpty ? empty : text;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final dateFmt = DateFormat.yMMMd();
-    final dateStr = dateFmt.format(widget.log.date);
+    final dateStr = DateFormat.yMMMd().format(widget.log.date);
 
     return Scaffold(
       appBar: AppBar(
@@ -145,8 +157,8 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.picture_as_pdf),
-            onPressed: _generatingPdf ? null : _generatePdf,
-            tooltip: 'Export PDF',
+            onPressed: _generatingPdf || _isLoading ? null : _generatePdf,
+            tooltip: 'Generate professional daily report',
           ),
         ],
       ),
@@ -157,25 +169,20 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _SectionHeader('Log Details'),
+                  _sectionHeader('Daily Log'),
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.all(16),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          if (widget.log.weather != null)
-                            _detailRow('Weather', widget.log.weather!),
-                          if (widget.log.crewCount != null)
-                            _detailRow('Crew Count', '${widget.log.crewCount}'),
-                          if (widget.log.workCompleted != null &&
-                              widget.log.workCompleted!.isNotEmpty)
-                            _detailRow(
-                              'Work Completed',
-                              widget.log.workCompleted!,
-                            ),
-                          if (widget.log.issues != null &&
-                              widget.log.issues!.isNotEmpty)
+                          if (_project != null) _detailRow('Project', _project!.name),
+                          _detailRow('Site', widget.site.name),
+                          if (widget.log.weather != null) _detailRow('Weather', widget.log.weather!),
+                          if (widget.log.crewCount != null) _detailRow('Crew Count', '${widget.log.crewCount}'),
+                          if (widget.log.workCompleted != null && widget.log.workCompleted!.isNotEmpty)
+                            _detailRow('Work Completed', widget.log.workCompleted!),
+                          if (widget.log.issues != null && widget.log.issues!.isNotEmpty)
                             _detailRow('Issues', widget.log.issues!),
                           if (widget.log.latitude != null)
                             _detailRow(
@@ -186,9 +193,37 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
                       ),
                     ),
                   ),
+                  const SizedBox(height: 18),
+                  _sectionHeader('Professional Report Details'),
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _detailRow('Report No.', _metaText(_reportMeta?.reportNo, empty: 'Auto-generated on export')),
+                          _detailRow('Shift', _metaText(_reportMeta?.shift, empty: 'Day')),
+                          _detailRow(
+                            'Measured Progress',
+                            _reportMeta?.progressQuantity == null
+                                ? 'Not recorded'
+                                : '${_reportMeta!.progressQuantity}${_reportMeta!.progressUnit == null ? '' : ' ${_reportMeta!.progressUnit}'}',
+                          ),
+                          if (_reportMeta?.percentComplete != null)
+                            _detailRow('Progress %', '${_reportMeta!.percentComplete!.toStringAsFixed(1)}%'),
+                          _detailRow('QC / Inspections', _metaText(_reportMeta?.qualityInspections)),
+                          _detailRow('HSE', _metaText(_reportMeta?.hseObservations)),
+                          _detailRow('Site Instructions', _metaText(_reportMeta?.siteInstructions)),
+                          _detailRow('Next-Day Plan', _metaText(_reportMeta?.nextDayPlan)),
+                          _detailRow('Document References', _metaText(_reportMeta?.documentReferences)),
+                          _detailRow('Prepared by', _metaText(_reportMeta?.preparedBy)),
+                        ],
+                      ),
+                    ),
+                  ),
                   if (widget.log.photoPaths.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    _SectionHeader('Photos'),
+                    const SizedBox(height: 18),
+                    _sectionHeader('Photos'),
                     SizedBox(
                       height: 100,
                       child: ListView.builder(
@@ -210,14 +245,9 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
                     ),
                   ],
                   const SizedBox(height: 24),
-                  _SectionHeader('Crew Attendance'),
+                  _sectionHeader('Crew Attendance'),
                   if (_attendance.isEmpty)
-                    const Card(
-                      child: Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Text('No attendance records'),
-                      ),
-                    )
+                    _emptyCard('No attendance records')
                   else
                     ..._attendance.map((a) => Card(
                           margin: const EdgeInsets.only(bottom: 8),
@@ -236,14 +266,9 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
                           ),
                         )),
                   const SizedBox(height: 24),
-                  _SectionHeader('Material Stock Reconciliation'),
+                  _sectionHeader('Material Stock Reconciliation'),
                   if (_materials.isEmpty)
-                    const Card(
-                      child: Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Text('No material records'),
-                      ),
-                    )
+                    _emptyCard('No material records')
                   else
                     _buildDataTable(
                       columns: ['Item', 'Open', 'Recv', 'Issue', 'Close'],
@@ -256,66 +281,60 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
                       ]).toList(),
                     ),
                   const SizedBox(height: 24),
-                  _SectionHeader('Equipment Dipping & Fuel'),
+                  _sectionHeader('Equipment Dipping & Fuel'),
                   if (_equipment.isEmpty)
-                    const Card(
-                      child: Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Text('No equipment records'),
-                      ),
-                    )
+                    _emptyCard('No equipment records')
                   else
                     _buildDataTable(
-                      columns: [
-                        'Equipment',
-                        'Open(cm)',
-                        'Close(cm)',
-                        'Diesel(L)',
-                        'Oil(L)',
-                      ],
+                      columns: ['Equipment', 'Open', 'Close', 'Diesel', 'Oil', 'Hours'],
                       rows: _equipment.map((e) => [
                         e.equipmentName,
                         e.openingDipCm?.toStringAsFixed(1) ?? '-',
                         e.closingDipCm?.toStringAsFixed(1) ?? '-',
                         e.dieselIssuedLitres.toStringAsFixed(1),
                         e.engineOilIssuedLitres.toStringAsFixed(1),
+                        e.operatingHours?.toStringAsFixed(1) ?? '-',
                       ]).toList(),
                     ),
                   if (_dieselActivity.isNotEmpty) ...[
                     const SizedBox(height: 24),
-                    _SectionHeader('Diesel Issued to Activities'),
+                    _sectionHeader('Diesel Issued to Activities'),
                     _buildDataTable(
                       columns: ['Activity / Machine', 'Litres'],
-                      rows: _dieselActivity
-                          .map((a) => [a.activityName, a.litresIssued.toStringAsFixed(1)])
-                          .toList(),
+                      rows: _dieselActivity.map((a) => [a.activityName, a.litresIssued.toStringAsFixed(1)]).toList(),
                     ),
                   ],
                   const SizedBox(height: 24),
-                  _SectionHeader('Itemized Expenses'),
+                  _sectionHeader('Concrete / Quality Control'),
+                  if (_concretePours.isEmpty)
+                    _emptyCard('No concrete pour or slump-test records')
+                  else
+                    _buildDataTable(
+                      columns: ['Element', 'Grade', 'Vol.', 'Slump', 'Cubes'],
+                      rows: _concretePours.map((c) => [
+                        c.elementName,
+                        c.concreteGrade,
+                        '${c.volumeM3.toStringAsFixed(2)} m³',
+                        c.slumpMm == null ? '-' : '${c.slumpMm!.toStringAsFixed(0)} mm',
+                        c.cubesCast.toString(),
+                      ]).toList(),
+                    ),
+                  const SizedBox(height: 24),
+                  _sectionHeader('Itemized Expenses'),
                   if (_expenses.isEmpty)
-                    const Card(
-                      child: Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Text('No expenses recorded'),
-                      ),
-                    )
+                    _emptyCard('No expenses recorded')
                   else
                     Column(
                       children: [
                         ..._expenses.map((e) => Card(
                               margin: const EdgeInsets.only(bottom: 8),
                               child: ListTile(
-                                leading: CircleAvatar(
-                                  child: Text('${e.serialNo ?? 0}'),
-                                ),
+                                leading: CircleAvatar(child: Text('${e.serialNo ?? 0}')),
                                 title: Text(e.displayDescription),
                                 subtitle: Text(e.category.label),
                                 trailing: Text(
                                   CurrencyFormatter.format(e.amount),
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                  ),
+                                  style: const TextStyle(fontWeight: FontWeight.bold),
                                 ),
                               ),
                             )),
@@ -329,28 +348,42 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              const Text(
-                                'Total',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
+                              const Text('Total', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                               Text(
-                                CurrencyFormatter.format(
-                                  _expenses.fold(0.0, (s, e) => s + e.amount),
-                                ),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 18,
-                                ),
+                                CurrencyFormatter.format(_expenses.fold(0.0, (s, e) => s + e.amount)),
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
                               ),
                             ],
                           ),
                         ),
                       ],
                     ),
+                  if (_cashFloat != null) ...[
+                    const SizedBox(height: 24),
+                    _sectionHeader('Cash Float Reconciliation'),
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          children: [
+                            _detailRow('Opening', CurrencyFormatter.format(_cashFloat!.openingBalance)),
+                            _detailRow('Float Received', CurrencyFormatter.format(_cashFloat!.floatReceived)),
+                            _detailRow('Expected Closing', CurrencyFormatter.format(_cashFloat!.expectedClosingBalance)),
+                            _detailRow('Reported Closing', CurrencyFormatter.format(_cashFloat!.reportedClosingBalance)),
+                            _detailRow('Variance', CurrencyFormatter.format(_cashFloat!.variance)),
+                            _detailRow('Status', _cashFloat!.status.label),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 28),
+                  FilledButton.icon(
+                    onPressed: _generatingPdf ? null : _generatePdf,
+                    icon: const Icon(Icons.picture_as_pdf_outlined),
+                    label: Text(_generatingPdf ? 'Generating Report…' : 'Generate Professional Daily Report'),
+                  ),
+                  const SizedBox(height: 24),
                 ],
               ),
             ),
@@ -363,9 +396,9 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            '$label: ',
-            style: const TextStyle(fontWeight: FontWeight.bold),
+          SizedBox(
+            width: 130,
+            child: Text('$label:', style: const TextStyle(fontWeight: FontWeight.bold)),
           ),
           Expanded(child: Text(value)),
         ],
@@ -373,7 +406,7 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
     );
   }
 
-  Widget _SectionHeader(String title) {
+  Widget _sectionHeader(String title) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Text(
@@ -382,6 +415,15 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
               fontWeight: FontWeight.bold,
               color: Colors.blue.shade900,
             ),
+      ),
+    );
+  }
+
+  Widget _emptyCard(String text) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Text(text),
       ),
     );
   }
@@ -397,16 +439,11 @@ class _DailyLogDetailScreenState extends State<DailyLogDetailScreen> {
           headingRowColor: WidgetStateProperty.all(Colors.blue.shade50),
           columns: columns
               .map((c) => DataColumn(
-                    label: Text(
-                      c,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
+                    label: Text(c, style: const TextStyle(fontWeight: FontWeight.bold)),
                   ))
               .toList(),
           rows: rows.map((r) {
-            return DataRow(
-              cells: r.map((cell) => DataCell(Text(cell))).toList(),
-            );
+            return DataRow(cells: r.map((cell) => DataCell(Text(cell))).toList());
           }).toList(),
         ),
       ),
