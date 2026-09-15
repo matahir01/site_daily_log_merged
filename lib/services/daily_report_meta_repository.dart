@@ -1,3 +1,4 @@
+import 'package:sqflite/sqflite.dart';
 import '../db/database_helper.dart';
 import '../models/daily_site_report_meta.dart';
 
@@ -25,22 +26,13 @@ class DailyReportMetaRepository {
   static Future<void> save(DailySiteReportMeta meta) async {
     await _ensureTable();
     final db = await DatabaseHelper.instance.database;
-    await db.insert(
-      'daily_site_report_meta',
-      meta.toMap(),
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('daily_site_report_meta', meta.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   static Future<DailySiteReportMeta?> getForLog(String logId) async {
     await _ensureTable();
     final db = await DatabaseHelper.instance.database;
-    final rows = await db.query(
-      'daily_site_report_meta',
-      where: 'daily_log_id = ?',
-      whereArgs: [logId],
-      limit: 1,
-    );
+    final rows = await db.query('daily_site_report_meta', where: 'daily_log_id = ?', whereArgs: [logId], limit: 1);
     return rows.isEmpty ? null : DailySiteReportMeta.fromMap(rows.first);
   }
 }
