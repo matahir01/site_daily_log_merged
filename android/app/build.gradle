@@ -23,7 +23,7 @@ if (flutterVersionName == null) {
 }
 
 android {
-    namespace = "com.example.site_daily_log"
+    namespace = "com.mat.civilsitemanager"
     compileSdk = 35
     ndkVersion = "27.0.12077973"
 
@@ -41,7 +41,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.site_daily_log"
+        applicationId = "com.mat.civilsitemanager"
         minSdk = 23
         multiDexEnabled = true
         targetSdk = 35
@@ -51,6 +51,7 @@ android {
 
     buildTypes {
         release {
+            // Temporary until a permanent release keystore is created for OAuth / store distribution.
             signingConfig = signingConfigs.debug
             minifyEnabled = true
             shrinkResources = true
