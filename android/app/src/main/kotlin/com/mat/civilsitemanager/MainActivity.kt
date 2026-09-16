@@ -1,4 +1,4 @@
-package com.example.site_daily_log
+package com.mat.civilsitemanager
 
 import io.flutter.embedding.android.FlutterActivity
 
