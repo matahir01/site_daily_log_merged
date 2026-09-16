@@ -3,18 +3,18 @@ import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:googleapis/sheets/v4.dart' as sheets;
 import 'package:http/http.dart' as http;
 
-/// Single shared [GoogleSignIn] instance for the whole app. Both the Drive
-/// backup feature and the Google Sheets sync feature request their scopes
-/// together up front, so the user only ever sees one consent screen instead
-/// of being asked to grant access twice.
+/// Single shared [GoogleSignIn] instance for the whole app.
+///
+/// The app deliberately requests the narrowest practical Google scopes:
+/// - drive.appdata for private database backups in appDataFolder
+/// - drive.file for spreadsheets/files Civil Site Manager creates or opens
+///
+/// `drive.file` is accepted by the Google Sheets API for per-file access, so
+/// a broad `spreadsheets` scope is not required for our create/sync workflow.
 class GoogleAuth {
   static final GoogleSignIn instance = GoogleSignIn(
     scopes: [
       drive.DriveApi.driveAppdataScope,
-      sheets.SheetsApi.spreadsheetsScope,
-      // Lets the app create/open spreadsheet files it created in the
-      // user's normal (visible) Drive — separate from the hidden
-      // appDataFolder space used for database backups.
       drive.DriveApi.driveFileScope,
     ],
   );
